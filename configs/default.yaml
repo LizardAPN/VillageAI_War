@@ -14,7 +14,7 @@ game:
   initial_resources:
     wood: 200
     stone: 100
-    food: 500
+    food: 5000
   initial_bots: 10
   initial_buildings:
     - barracks
@@ -30,7 +30,7 @@ logging:
 
 rendering:
   cell_size: 24
-  fps: 10
+  fps: 30
 
 hydra:
   run:

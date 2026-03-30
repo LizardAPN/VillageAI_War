@@ -9,12 +9,12 @@ rewards:
       death: -10.0
       noop: -0.01
     gatherer:
-      resource_collected: 0.5
+      resource_collected: 1.0
       damage_taken: -0.05
       death: -10.0
       noop: -0.01
     farmer:
-      food_produced: 0.5
+      food_produced: 1.0
       damage_taken: -0.05
       death: -10.0
       noop: -0.01

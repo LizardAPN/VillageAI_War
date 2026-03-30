@@ -4,7 +4,7 @@
 # Multi-bot stage-1 needs policy sync or DummyVecEnv-only; see initial_bots below.
 training:
   stage: 1
-  total_timesteps: 2000000
+  total_timesteps: 200000
   selfplay_iterations: 20
   n_envs: 8
   n_steps: 512
