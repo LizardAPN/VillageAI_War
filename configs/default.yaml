@@ -28,6 +28,14 @@ logging:
 rendering:
   cell_size: 24
   fps: 30
+  # 3D view (render_mode human_3d / rgb_array_3d)
+  window_width_3d: 960
+  window_height_3d: 720
+  camera_fov_deg: 50
+  camera_dist_scale: 1.4
+  camera_pitch_deg: 32
+  camera_yaw_deg: 40
+  auto_rotate_deg_per_sec: 10
 
 hydra:
   run:

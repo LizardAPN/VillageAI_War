@@ -46,6 +46,10 @@ When any village, opponent, or bot checkpoint is loaded (or you pass a path that
 
 The pygame **human** window includes numeric **row/column axes**, a **legend** (terrain colors, harvest hints `w`/`s`/`f`, unit roles and team rings, building abbreviations), and a **bottom HUD** (tick, winner, resources, population, global mode per team). `rgb_array` mode is still the raw map only for headless frames.
 
+**3D view** (OpenGL via [moderngl](https://github.com/moderngl/moderngl)): run `python scripts/run_game.py --human-3d` for an extruded terrain board, box buildings, sphere bots, and a slow auto-rotating camera. Tuning lives under `rendering.*` in [`configs/default.yaml`](configs/default.yaml) (`window_width_3d`, `camera_dist_scale`, `auto_rotate_deg_per_sec`, …). In code, use `GameEnv(..., render_mode="human_3d")` or `render_mode="rgb_array_3d"` for off-screen RGB frames of the same view.
+
+On **Linux**, Mesa packages expose `libGL.so.1` (not `libGL.so`); this project patches library loading so moderngl finds them. If you still see GL errors, install dri drivers: `sudo apt install -y libgl1-mesa-dri libegl1`. On **WSL2** you need a working GUI stack (WSLg); without it, use 2D or run from native Windows. If 3D fails, `run_game.py` falls back to the 2D pygame window and logs a warning.
+
 ### Training (Hydra)
 
 The default config composes `training: train_bots_selfplay` (see [`configs/default.yaml`](configs/default.yaml)). Stages are selected with `training.stage` (`0` = unified, `1`–`3` = legacy pipeline).

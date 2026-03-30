@@ -40,10 +40,10 @@ class GameEnv(gym.Env):
         config: Hydra/OmegaConf merged config (dict-like).
         mode: ``"bot"`` | ``"village"`` | ``"full"``.
         team: Learning team index (``0`` red, ``1`` blue).
-        render_mode: ``"human"`` | ``"rgb_array"`` | ``None``.
+        render_mode: ``"human"`` | ``"human_3d"`` | ``"rgb_array"`` | ``"rgb_array_3d"`` | ``None``.
     """
 
-    metadata = {"render_modes": ["human", "rgb_array"]}
+    metadata = {"render_modes": ["human", "human_3d", "rgb_array", "rgb_array_3d"]}
 
     BOT_ACTIONS = 12
     _DIRS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
@@ -275,11 +275,26 @@ class GameEnv(gym.Env):
     def render(self) -> np.ndarray | None:
         if self.render_mode is None:
             return None
+        mode = cast(str, self.render_mode)
+        if self._renderer is not None:
+            tag = getattr(self._renderer, "_render_backend", "pygame")
+            want_3d = mode in ("human_3d", "rgb_array_3d")
+            if (tag == "pygame" and want_3d) or (tag == "moderngl" and not want_3d):
+                self._renderer.close()
+                self._renderer = None
+
+        if mode in ("human_3d", "rgb_array_3d"):
+            from village_ai_war.rendering.moderngl_3d_renderer import Moderngl3DRenderer
+
+            if self._renderer is None:
+                self._renderer = Moderngl3DRenderer(self.config, self._state)
+            return self._renderer.render(self._state, mode=mode)
+
         from village_ai_war.rendering.pygame_renderer import PygameRenderer
 
         if self._renderer is None:
             self._renderer = PygameRenderer(self.config, self._state)
-        return self._renderer.render(self._state, mode=cast(str, self.render_mode))
+        return self._renderer.render(self._state, mode=mode)
 
     def close(self) -> None:
         if self._renderer is not None:
