@@ -37,6 +37,8 @@ python scripts/run_game.py \
 
 When any village, opponent, or bot checkpoint is loaded (or you pass a path that exists), the viewer runs **both** village managers each tick (trained or random per side), then resolves the tick in the same order as self-play training (`run_bots_then_village_decisions` in [`GameEnv`](src/village_ai_war/env/game_env.py)). If **no** checkpoints load, behavior matches the legacy script: one random manager action per step for team 0 only.
 
+The pygame **human** window includes numeric **row/column axes**, a **legend** (terrain colors, harvest hints `w`/`s`/`f`, unit roles and team rings, building abbreviations), and a **bottom HUD** (tick, winner, resources, population, global mode per team). `rgb_array` mode is still the raw map only for headless frames.
+
 ### Training (Hydra)
 
 The default config composes `training: train_bots_selfplay` (see [`configs/default.yaml`](configs/default.yaml)). Stages are selected with `training.stage`.
