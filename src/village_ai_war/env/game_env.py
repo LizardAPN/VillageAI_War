@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, SupportsFloat, cast
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, SupportsFloat, cast
 
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
+from loguru import logger
 
 from village_ai_war.agents.action_masker import ActionMasker
 from village_ai_war.agents.bot_obs_builder import BotObsBuilder
@@ -62,7 +65,10 @@ class GameEnv(gym.Env):
         self._state: GameState | None = None
         self._rng: np.random.Generator | None = None
         self._controlled_bot_id: int = 0
+        self._opponent_controlled_bot_id: int = 0
         self._renderer: Any = None
+        self._loaded_bot_policy: Any = None
+        self._bot_policy_load_attempted: bool = False
 
         n = int(config["map"]["size"])
         max_bots = int(config["game"].get("max_bots_for_role_change", 32))
@@ -120,6 +126,9 @@ class GameEnv(gym.Env):
             ]
             pick = candidates[0] if candidates else (vb[0] if vb else None)
             self._controlled_bot_id = pick.bot_id if pick is not None else 0
+            opp_team = 1 - self.team
+            opp_alive = [b for b in self._state.villages[opp_team].bots if b.is_alive]
+            self._opponent_controlled_bot_id = opp_alive[0].bot_id if opp_alive else 0
 
         obs = self._build_obs()
         info = self._info_dict()
@@ -128,9 +137,6 @@ class GameEnv(gym.Env):
     def step(self, action: Any) -> tuple[Any, SupportsFloat, bool, bool, dict[str, Any]]:
         assert self._state is not None and self._rng is not None
         state = self._state
-        terminated = False
-        truncated = False
-        reward = 0.0
 
         manager_action: dict[str, Any] | None = None
         interval = int(self.config["game"]["manager_interval"])
@@ -141,15 +147,245 @@ class GameEnv(gym.Env):
         if self.mode == "full" and state.tick % interval == 0:
             self._apply_village_decision(1 - self.team, {"kind": "noop"})
 
+        self._ensure_bot_policy_loaded()
         melee_intents: list[tuple[int, int, tuple[int, int]]] = []
+        learner_bot_action: int | None = None
 
         if self.mode == "bot":
-            self._apply_bot_action(self.team, self._controlled_bot_id, int(action), melee_intents)
-            self._heuristic_team(self.team, exclude_id=self._controlled_bot_id, melee_intents=melee_intents)
-            self._heuristic_team(1 - self.team, exclude_id=None, melee_intents=melee_intents)
+            learner_bot_action = int(action)
+            self._apply_bot_action(
+                self.team, self._controlled_bot_id, learner_bot_action, melee_intents
+            )
+            ex = frozenset({(self.team, self._controlled_bot_id)})
+            self._step_all_bots_with_policy(self._loaded_bot_policy, melee_intents, exclude=ex)
         else:
-            self._heuristic_team(0, exclude_id=None, melee_intents=melee_intents)
-            self._heuristic_team(1, exclude_id=None, melee_intents=melee_intents)
+            self._step_all_bots_with_policy(self._loaded_bot_policy, melee_intents, exclude=None)
+
+        return self._advance_tick_after_bots(
+            melee_intents,
+            manager_action=manager_action,
+            learner_bot_action=learner_bot_action,
+        )
+
+    def step_with_opponent(
+        self,
+        red_action: int,
+        blue_action: int,
+    ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+        """Single tick in ``bot`` mode with explicit actions for both teams."""
+        if self.mode != "bot":
+            raise ValueError("step_with_opponent requires mode='bot'")
+        assert self._state is not None and self._rng is not None
+        melee_intents: list[tuple[int, int, tuple[int, int]]] = []
+        self._apply_bot_action(0, self._controlled_bot_id, int(red_action), melee_intents)
+        self._apply_bot_action(1, self._opponent_controlled_bot_id, int(blue_action), melee_intents)
+        ex = frozenset(
+            {
+                (0, self._controlled_bot_id),
+                (1, self._opponent_controlled_bot_id),
+            }
+        )
+        self._ensure_bot_policy_loaded()
+        self._step_all_bots_with_policy(self._loaded_bot_policy, melee_intents, exclude=ex)
+        return self._advance_tick_after_bots(
+            melee_intents,
+            manager_action=None,
+            learner_bot_action=int(red_action),
+        )
+
+    def step_village_only(
+        self,
+        red_village_action: int,
+        blue_village_action: int,
+        melee_intents: list[tuple[int, int, tuple[int, int]]],
+    ) -> tuple[Any, float, bool, bool, dict[str, Any]]:
+        """Apply both managers' decisions, then resolve combat/economy (bots already moved)."""
+        if self.mode not in ("village", "full"):
+            raise ValueError("step_village_only requires mode='village' or 'full'")
+        assert self._state is not None
+        state = self._state
+        interval = int(self.config["game"]["manager_interval"])
+        manager_action: dict[str, Any] | None = None
+        if state.tick % interval == 0:
+            red_dec = decode_village_action(self._village_space, int(red_village_action))
+            blue_dec = decode_village_action(self._village_space, int(blue_village_action))
+            self._apply_village_decision(0, red_dec)
+            self._apply_village_decision(1, blue_dec)
+            manager_action = red_dec if self.team == 0 else blue_dec
+        return self._advance_tick_after_bots(
+            melee_intents,
+            manager_action=manager_action,
+            learner_bot_action=None,
+        )
+
+    def get_village_observation(self, team: int) -> dict[str, np.ndarray]:
+        """Return the village manager observation for ``team`` (``map`` + ``village`` tensors).
+
+        Args:
+            team: ``0`` (red) or ``1`` (blue).
+
+        Raises:
+            ValueError: If ``mode`` is not ``village`` or ``full``.
+        """
+        if self.mode not in ("village", "full"):
+            raise ValueError("get_village_observation requires mode='village' or 'full'")
+        return self._get_village_obs(team)
+
+    def run_bots_then_village_decisions(
+        self,
+        bot_policy: Any,
+        red_village_action: int,
+        blue_village_action: int,
+    ) -> tuple[Any, float, bool, bool, dict[str, Any]]:
+        """Run one tick: all bots act, then both managers' village actions are applied.
+
+        Matches the order used in self-play village training. Use ``bot_policy=None``
+        (or pass a loaded PPO) for low-level control; ``None`` yields random bot moves.
+
+        Args:
+            bot_policy: Frozen PPO for bots, or ``None`` for random discrete actions.
+            red_village_action: Flattened village action index for team 0.
+            blue_village_action: Flattened village action index for team 1.
+
+        Raises:
+            ValueError: If ``mode`` is not ``village`` or ``full``.
+        """
+        if self.mode not in ("village", "full"):
+            raise ValueError("run_bots_then_village_decisions requires mode='village' or 'full'")
+        melee_intents: list[tuple[int, int, tuple[int, int]]] = []
+        self._step_all_bots_with_policy(bot_policy, melee_intents, exclude=None)
+        return self.step_village_only(
+            int(red_village_action), int(blue_village_action), melee_intents
+        )
+
+    def action_masks(self, team: int | None = None) -> np.ndarray:
+        """Boolean mask of valid village actions (MaskablePPO)."""
+        assert self._state is not None
+        t = self.team if team is None else team
+        if self.mode not in ("village", "full"):
+            return np.ones((self._village_space.n_actions,), dtype=bool)
+        m = ActionMasker.compute_masks(self._state, t, self.config)
+        interval = int(self.config["game"]["manager_interval"])
+        if self._state.tick % interval != 0:
+            m = np.zeros_like(m)
+            m[self._village_space.offset_noop] = True
+        return m
+
+    def render(self) -> np.ndarray | None:
+        if self.render_mode is None:
+            return None
+        from village_ai_war.rendering.pygame_renderer import PygameRenderer
+
+        if self._renderer is None:
+            self._renderer = PygameRenderer(self.config, self._state)
+        return self._renderer.render(self._state, mode=cast(str, self.render_mode))
+
+    def close(self) -> None:
+        if self._renderer is not None:
+            self._renderer.close()
+            self._renderer = None
+
+    def _build_obs(self) -> Any:
+        assert self._state is not None
+        if self.mode == "bot":
+            return self._bot_obs.build(self._state, self._controlled_bot_id)
+        return self._vil_obs.build(self._state, self.team)
+
+    def _info_dict(self) -> dict[str, Any]:
+        assert self._state is not None
+        return {
+            "tick": self._state.tick,
+            "team": self.team,
+            "mode": self.mode,
+        }
+
+    def _bot_checkpoint_path(self) -> Path | None:
+        from omegaconf import OmegaConf
+
+        cfg: dict[str, Any] = (
+            OmegaConf.to_container(self.config, resolve=True)  # type: ignore[assignment]
+            if OmegaConf.is_config(self.config)
+            else dict(self.config)
+        )
+        game = cfg.get("game")
+        if isinstance(game, dict):
+            p = game.get("bot_rl_checkpoint")
+            if p:
+                path = Path(str(p))
+                return path if path.suffix else path.with_suffix(".zip")
+        training = cfg.get("training")
+        if isinstance(training, dict) and training.get("bot_checkpoint"):
+            path = Path(str(training["bot_checkpoint"]))
+            return path if path.suffix else path.with_suffix(".zip")
+        return None
+
+    def _ensure_bot_policy_loaded(self) -> None:
+        if self._bot_policy_load_attempted:
+            return
+        self._bot_policy_load_attempted = True
+        path = self._bot_checkpoint_path()
+        if path is None:
+            return
+        if not path.is_file():
+            logger.warning("Bot RL checkpoint not found at {}, using random bot actions", path)
+            return
+        try:
+            from stable_baselines3 import PPO
+
+            self._loaded_bot_policy = PPO.load(str(path))
+            logger.info("Loaded bot policy from {}", path)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to load bot policy from {}: {}", path, e)
+
+    def _get_single_bot_obs(self, bot_id: int) -> np.ndarray:
+        assert self._state is not None
+        return self._bot_obs.build(self._state, bot_id)
+
+    def _get_bot_obs(self, team: int) -> np.ndarray | None:
+        """Observation for the first alive bot on ``team`` (opponent policy input)."""
+        assert self._state is not None
+        alive = [b for b in self._state.villages[team].bots if b.is_alive]
+        if not alive:
+            return None
+        return self._get_single_bot_obs(alive[0].bot_id)
+
+    def _get_village_obs(self, team: int) -> dict[str, np.ndarray]:
+        assert self._state is not None
+        return self._vil_obs.build(self._state, team)
+
+    def _step_all_bots_with_policy(
+        self,
+        bot_policy: Any,
+        melee_intents: list[tuple[int, int, tuple[int, int]]],
+        *,
+        exclude: frozenset[tuple[int, int]] | None = None,
+    ) -> None:
+        """Step every alive bot with ``bot_policy.predict`` or random actions."""
+        assert self._state is not None and self._rng is not None
+        ex = exclude or frozenset()
+        for team in (0, 1):
+            for bot in self._state.villages[team].bots:
+                if not bot.is_alive or (team, bot.bot_id) in ex:
+                    continue
+                obs = self._get_single_bot_obs(bot.bot_id)
+                if bot_policy is not None:
+                    act, _ = bot_policy.predict(obs, deterministic=False)
+                    act_int = int(np.asarray(act).reshape(-1)[0])
+                else:
+                    act_int = int(self._rng.integers(0, self.BOT_ACTIONS))
+                self._apply_bot_action(team, bot.bot_id, act_int, melee_intents)
+
+    def _advance_tick_after_bots(
+        self,
+        melee_intents: list[tuple[int, int, tuple[int, int]]],
+        *,
+        manager_action: dict[str, Any] | None,
+        learner_bot_action: int | None,
+    ) -> tuple[Any, float, bool, bool, dict[str, Any]]:
+        assert self._state is not None
+        state = self._state
+        terminated = False
+        truncated = False
 
         cmb = CombatSystem.apply_melee_intents(state, self.config, melee_intents)
         eco = EconomySystem.step(state, self.config)
@@ -194,7 +430,8 @@ class GameEnv(gym.Env):
 
         state.tick += 1
 
-        if self.mode == "bot":
+        reward: float
+        if self.mode == "bot" and learner_bot_action is not None:
             bot = next(
                 (
                     b
@@ -206,17 +443,21 @@ class GameEnv(gym.Env):
             )
             if bot is not None:
                 mode = state.villages[self.team].global_reward_mode
-                bev = self._bot_events_for(bot, merged, int(action))
-                reward = BotRewardCalculator.compute(bev, bot, mode, self.config)
+                bev = self._bot_events_for(bot, merged, learner_bot_action)
+                reward = float(BotRewardCalculator.compute(bev, bot, mode, self.config))
+            else:
+                reward = 0.0
         else:
-            reward = VillageRewardCalculator.compute(
-                merged,
-                state.villages[self.team],
-                self.config,
-                terminated or truncated,
-                True
-                if won == self.team
-                else (False if won is not None and won != self.team else None),
+            reward = float(
+                VillageRewardCalculator.compute(
+                    merged,
+                    state.villages[self.team],
+                    self.config,
+                    terminated or truncated,
+                    True
+                    if won == self.team
+                    else (False if won is not None and won != self.team else None),
+                )
             )
 
         obs = self._build_obs()
@@ -226,48 +467,9 @@ class GameEnv(gym.Env):
             "resources_delta": resources_delta,
             "manager_action": manager_action,
             "bots_alive": bots_alive,
+            "winner": state.winner,
         }
-        return obs, float(reward), terminated, truncated, info
-
-    def action_masks(self) -> np.ndarray:
-        """Boolean mask of valid village actions (MaskablePPO)."""
-        assert self._state is not None
-        if self.mode not in ("village", "full"):
-            return np.ones((self._village_space.n_actions,), dtype=bool)
-        m = ActionMasker.compute_masks(self._state, self.team, self.config)
-        interval = int(self.config["game"]["manager_interval"])
-        if self._state.tick % interval != 0:
-            m = np.zeros_like(m)
-            m[self._village_space.offset_noop] = True
-        return m
-
-    def render(self) -> np.ndarray | None:
-        if self.render_mode is None:
-            return None
-        from village_ai_war.rendering.pygame_renderer import PygameRenderer
-
-        if self._renderer is None:
-            self._renderer = PygameRenderer(self.config, self._state)
-        return self._renderer.render(self._state, mode=cast(str, self.render_mode))
-
-    def close(self) -> None:
-        if self._renderer is not None:
-            self._renderer.close()
-            self._renderer = None
-
-    def _build_obs(self) -> Any:
-        assert self._state is not None
-        if self.mode == "bot":
-            return self._bot_obs.build(self._state, self._controlled_bot_id)
-        return self._vil_obs.build(self._state, self.team)
-
-    def _info_dict(self) -> dict[str, Any]:
-        assert self._state is not None
-        return {
-            "tick": self._state.tick,
-            "team": self.team,
-            "mode": self.mode,
-        }
+        return obs, reward, terminated, truncated, info
 
     def _apply_village_decision(self, team: int, dec: Mapping[str, Any]) -> None:
         assert self._state is not None
@@ -363,82 +565,6 @@ class GameEnv(gym.Env):
                     bx, by = b.position
                     if abs(bx - ax) + abs(by - ay) == 1:
                         b.hp = min(b.max_hp, b.hp + max(1, int(0.1 * b.max_hp)))
-
-    def _heuristic_team(
-        self,
-        team: int,
-        exclude_id: int | None,
-        melee_intents: list[tuple[int, int, tuple[int, int]]],
-    ) -> None:
-        assert self._state is not None
-        enemy_team = 1 - team
-        for bot in self._state.villages[team].bots:
-            if not bot.is_alive or (exclude_id is not None and bot.bot_id == exclude_id):
-                continue
-            if bot.role == Role.WARRIOR:
-                target = GameEnv._nearest_enemy_bot(self._state, team, bot.position)
-                if target is not None:
-                    tx, ty = target.position
-                    bx, by = bot.position
-                    dx = 0 if tx == bx else (1 if tx > bx else -1)
-                    dy = 0 if ty == by else (1 if ty > by else -1)
-                    prefer_dx = abs(tx - bx) >= abs(ty - by)
-                    move = (dx, 0) if prefer_dx and dx != 0 else (0, dy) if dy != 0 else (0, 0)
-                    if move != (0, 0):
-                        self._apply_bot_action(
-                            team,
-                            bot.bot_id,
-                            self._dirs_to_move_action(move),
-                            melee_intents,
-                        )
-                    elif self._rng and self._rng.random() < 0.3:
-                        self._apply_bot_action(
-                            team,
-                            bot.bot_id,
-                            5 + self._attack_dir_toward((bx, by), (tx, ty)),
-                            melee_intents,
-                        )
-            elif bot.role == Role.GATHERER:
-                if self._rng and self._rng.random() < 0.5:
-                    self._apply_bot_action(team, bot.bot_id, 1 + int(self._rng.integers(0, 4)), melee_intents)
-
-    def _dirs_to_move_action(self, move: tuple[int, int]) -> int:
-        if move == (0, 0):
-            return 0
-        return 1 + self._DIRS.index(move)
-
-    def _attack_dir_toward(
-        self,
-        pos: tuple[int, int],
-        tgt: tuple[int, int],
-    ) -> int:
-        bx, by = pos
-        tx, ty = tgt
-        if tx > bx:
-            return 1
-        if tx < bx:
-            return 3
-        if ty > by:
-            return 2
-        return 0
-
-    @staticmethod
-    def _nearest_enemy_bot(
-        state: GameState,
-        team: int,
-        pos: tuple[int, int],
-    ) -> BotState | None:
-        best: BotState | None = None
-        best_d = 10**9
-        ex, ey = pos
-        for b in state.villages[1 - team].bots:
-            if not b.is_alive:
-                continue
-            d = abs(b.position[0] - ex) + abs(b.position[1] - ey)
-            if d < best_d:
-                best_d = d
-                best = b
-        return best
 
     @staticmethod
     def _unit_at(state: GameState, x: int, y: int, exclude: BotState | None) -> bool:

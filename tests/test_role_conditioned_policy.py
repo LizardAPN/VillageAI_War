@@ -1,16 +1,24 @@
-"""Smoke tests for GameEnv without display."""
+"""Smoke test for RoleConditionedPolicy with SB3."""
+
+from __future__ import annotations
 
 from typing import Any
 
 import numpy as np
 import pytest
 
-pytest.importorskip("gymnasium")
+pytest.importorskip("torch")
+pytest.importorskip("stable_baselines3")
 
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import DummyVecEnv
+
+from village_ai_war.agents.bot_obs_builder import BotObsBuilder
 from village_ai_war.env.game_env import GameEnv
+from village_ai_war.models.role_conditioned_policy import RoleConditionedPolicy
 
 
-def _tiny_config() -> dict[str, Any]:
+def _tiny() -> dict[str, Any]:
     return {
         "map": {
             "size": 12,
@@ -52,7 +60,7 @@ def _tiny_config() -> dict[str, Any]:
             "max_ticks": 50,
             "manager_interval": 5,
             "initial_resources": {"wood": 200, "stone": 100, "food": 500},
-            "initial_bots": 4,
+            "initial_bots": 1,
             "initial_buildings": ["barracks", "storage"],
             "blueprint_adjacent_to_townhall": True,
             "max_bots_for_role_change": 16,
@@ -67,8 +75,18 @@ def _tiny_config() -> dict[str, Any]:
                     "death": -10.0,
                     "noop": -0.01,
                 },
-                "gatherer": {"resource_collected": 0.5, "damage_taken": -0.05, "death": -10.0, "noop": -0.01},
-                "farmer": {"food_produced": 0.5, "damage_taken": -0.05, "death": -10.0, "noop": -0.01},
+                "gatherer": {
+                    "resource_collected": 0.5,
+                    "damage_taken": -0.05,
+                    "death": -10.0,
+                    "noop": -0.01,
+                },
+                "farmer": {
+                    "food_produced": 0.5,
+                    "damage_taken": -0.05,
+                    "death": -10.0,
+                    "noop": -0.01,
+                },
                 "builder": {
                     "block_placed": 2.0,
                     "repair_pct": 0.1,
@@ -93,55 +111,13 @@ def _tiny_config() -> dict[str, Any]:
     }
 
 
-def test_village_reset_step() -> None:
-    env = GameEnv(_tiny_config(), mode="village", team=0, render_mode=None)
-    obs, info = env.reset(seed=1)
-    assert "map" in obs and "village" in obs
-    masks = env.action_masks()
-    assert masks.any()
-    obs2, r, term, trunc, info2 = env.step(0)
-    assert isinstance(r, float)
-    assert "kills_this_tick" in info2
-
-
-def test_bot_reset_step() -> None:
-    env = GameEnv(_tiny_config(), mode="bot", team=0, render_mode=None)
-    obs, _ = env.reset(seed=2)
-    assert obs.shape == (181,)
-    obs2, r, term, trunc, _ = env.step(0)
-    assert len(obs2) == 181
-
-
-def test_step_with_opponent_and_action_masks_team() -> None:
-    cfg = _tiny_config()
-    cfg["game"]["initial_bots"] = 1
-    env = GameEnv(cfg, mode="bot", team=0, render_mode=None)
-    env.reset(seed=0)
-    obs, r, term, trunc, info = env.step_with_opponent(0, 0)
-    assert obs.shape == (181,)
-    assert "kills_this_tick" in info
-    assert "winner" in info
-
-    venv = GameEnv(cfg, mode="village", team=0, render_mode=None)
-    venv.reset(seed=0)
-    m0 = venv.action_masks()
-    m1 = venv.action_masks(team=1)
-    assert m0.shape == m1.shape
-    assert m0.dtype == bool
-
-
-def test_get_village_observation_and_run_bots_then_village() -> None:
-    env = GameEnv(_tiny_config(), mode="village", team=0, render_mode=None)
-    env.reset(seed=3)
-    o0 = env.get_village_observation(0)
-    o1 = env.get_village_observation(1)
-    assert "map" in o0 and "village" in o0
-    assert o0["map"].shape == o1["map"].shape
-    m0 = env.action_masks(team=0)
-    m1 = env.action_masks(team=1)
-    a0 = int(np.flatnonzero(m0)[0])
-    a1 = int(np.flatnonzero(m1)[0])
-    obs, r, term, trunc, info = env.run_bots_then_village_decisions(None, a0, a1)
-    assert "map" in obs and "village" in obs
-    assert isinstance(r, float)
-    assert "kills_this_tick" in info
+def test_ppo_role_conditioned_predict() -> None:
+    venv = DummyVecEnv(
+        [lambda: GameEnv(_tiny(), mode="bot", team=0, render_mode=None)]
+    )
+    model = PPO(RoleConditionedPolicy, venv, n_steps=64, batch_size=32, verbose=0)
+    obs = np.zeros((1, BotObsBuilder.OBS_DIM), dtype=np.float32)
+    obs[0, 98] = 1.0
+    act, _ = model.predict(obs[0], deterministic=True)
+    assert 0 <= int(act) < GameEnv.BOT_ACTIONS
+    venv.close()

@@ -1,8 +1,7 @@
 """Stage 3: joint fine-tuning (village MaskablePPO with reduced learning rate).
 
-    Bot policies remain heuristic-driven in the environment for this MVP; the
-    village policy is fine-tuned with a lower learning rate. A future iteration
-    can alternate PPO updates for bots at ``training.bot_joint_lr_factor``.
+    Low-level units are controlled by the frozen stage-1 bot policy when
+    ``checkpoints/bots/bot_final.zip`` exists; otherwise actions are random.
 """
 
 from __future__ import annotations
@@ -10,10 +9,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from loguru import logger
 from sb3_contrib import MaskablePPO
 from stable_baselines3.common.callbacks import CheckpointCallback
-import numpy as np
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
@@ -34,8 +33,12 @@ def _cfg_to_dict(cfg: Any) -> dict[str, Any]:
 
 
 def run_joint_training(cfg: Any, team: int = 0) -> None:
-    """Fine-tune village MaskablePPO in ``full`` mode (both sides heuristic managers)."""
+    """Fine-tune village MaskablePPO in ``full`` mode (RL bots, scripted opponent manager)."""
     flat = _cfg_to_dict(cfg)
+    game = dict(flat.get("game", {}))
+    bot_ckpt = Path(flat["training"]["checkpoint_dir"]) / "bots" / "bot_final.zip"
+    game["bot_rl_checkpoint"] = str(bot_ckpt)
+    flat = {**flat, "game": game}
     tcfg = flat["training"]
     total = int(tcfg["total_timesteps"])
     base_lr = float(tcfg["learning_rate"])
@@ -56,7 +59,7 @@ def run_joint_training(cfg: Any, team: int = 0) -> None:
     else:
         logger.warning("No village checkpoint at {}; training from scratch", prev)
         model = MaskablePPO(
-            "MlpPolicy",
+            "MultiInputPolicy",
             venv,
             verbose=1,
             learning_rate=lr,

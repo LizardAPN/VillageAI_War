@@ -22,12 +22,16 @@ Custom Gymnasium environment for hierarchical multi-agent reinforcement learning
 
 ```bash
 cd VillageAI_War
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 pip install -e .
 python scripts/run_game.py
 python scripts/run_training.py training.stage=1
 python scripts/run_training.py training.stage=2
+python scripts/evaluate.py
 ```
+
+Training entrypoint uses Hydra; override configs from the CLI (for example ``training.total_timesteps=50000``). Stage 2/3 configs can be composed via ``--config-name=training/train_village``.
 
 ## Training Stages
 

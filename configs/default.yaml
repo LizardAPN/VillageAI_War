@@ -5,7 +5,7 @@ defaults:
   - buildings
   - rewards/bot_rewards
   - rewards/village_rewards
-  - training/train_bots
+  - training: train_bots_selfplay
   - _self_
 
 game:

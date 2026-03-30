@@ -14,9 +14,9 @@ import hydra
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-from village_ai_war.training.train_bots import run_bot_training
+from village_ai_war.training.train_bots_selfplay import run_bots_selfplay_training
 from village_ai_war.training.train_joint import run_joint_training
-from village_ai_war.training.train_village import run_village_training
+from village_ai_war.training.train_village_selfplay import run_village_selfplay_training
 
 
 @hydra.main(version_base=None, config_path=str(_ROOT / "configs"), config_name="default")
@@ -38,9 +38,9 @@ def main(cfg: DictConfig) -> None:
     stage = int(flat["training"]["stage"])
     logger.info("Starting training stage {}", stage)
     if stage == 1:
-        run_bot_training(cfg)
+        run_bots_selfplay_training(cfg)
     elif stage == 2:
-        run_village_training(cfg)
+        run_village_selfplay_training(cfg)
     elif stage == 3:
         run_joint_training(cfg)
     else:
