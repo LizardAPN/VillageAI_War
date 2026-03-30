@@ -427,6 +427,10 @@ class GameEnv(gym.Env):
         if state.tick >= state.max_ticks:
             truncated = True
             state.is_done = True
+        elif state.is_done:
+            # Draw (no alive bots on both sides), stagnation, etc.: ``won`` is None
+            # but the episode must still end for Gymnasium / UI.
+            terminated = True
 
         state.tick += 1
 

@@ -130,6 +130,25 @@ def test_step_with_opponent_and_action_masks_team() -> None:
     assert m0.dtype == bool
 
 
+def test_mutual_extinction_terminates_episode() -> None:
+    """Both teams with zero alive bots must end the episode (terminated), not run forever."""
+    env = GameEnv(_tiny_config(), mode="village", team=0, render_mode=None)
+    env.reset(seed=0)
+    assert env._state is not None
+    env._state.tick = 1  # not a manager tick; only noop village actions valid
+    for v in env._state.villages:
+        for b in v.bots:
+            b.is_alive = False
+    m0 = env.action_masks(team=0)
+    m1 = env.action_masks(team=1)
+    a0 = int(np.argmax(m0))
+    a1 = int(np.argmax(m1))
+    _obs, _r, term, trunc, info = env.run_bots_then_village_decisions(None, a0, a1)
+    assert term is True
+    assert trunc is False
+    assert info.get("winner") is None
+
+
 def test_get_village_observation_and_run_bots_then_village() -> None:
     env = GameEnv(_tiny_config(), mode="village", team=0, render_mode=None)
     env.reset(seed=3)
