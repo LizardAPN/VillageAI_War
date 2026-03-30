@@ -1,0 +1,31 @@
+# @package _global_
+buildings:
+  townhall:
+    hp: 1000
+    cost: {}
+  barracks:
+    hp: 300
+    cost:
+      wood: 100
+  storage:
+    hp: 200
+    cost:
+      wood: 50
+  farm:
+    hp: 200
+    cost:
+      wood: 80
+  tower:
+    hp: 400
+    cost:
+      stone: 100
+  wall:
+    hp: 500
+    cost:
+      stone: 30
+  citadel:
+    hp: 800
+    cost:
+      stone: 200
+      wood: 150
+  citadel_pop_bonus: 5

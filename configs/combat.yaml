@@ -1,0 +1,21 @@
+# @package _global_
+combat:
+  stats:
+    warrior:
+      hp: 100
+      damage: 25
+      attack_range: 1
+    gatherer:
+      hp: 80
+      damage: 8
+      attack_range: 1
+    farmer:
+      hp: 70
+      damage: 5
+      attack_range: 1
+    builder:
+      hp: 80
+      damage: 8
+      attack_range: 1
+  tower_damage: 15
+  tower_range: 3

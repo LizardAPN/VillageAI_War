@@ -1,0 +1,10 @@
+# @package _global_
+map:
+  size: 24
+  seed: 42
+  resource_density: 0.15
+  mountain_density: 0.05
+  resource_capacity:
+    forest: 500
+    stone: 300
+    field: 999999

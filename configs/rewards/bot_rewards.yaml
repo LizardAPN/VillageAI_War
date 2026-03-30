@@ -1,0 +1,30 @@
+# @package _global_
+rewards:
+  bot:
+    alpha: 0.7
+    warrior:
+      damage_dealt: 0.1
+      kill: 5.0
+      damage_taken: -0.05
+      death: -10.0
+      noop: -0.01
+    gatherer:
+      resource_collected: 0.5
+      damage_taken: -0.05
+      death: -10.0
+      noop: -0.01
+    farmer:
+      food_produced: 0.5
+      damage_taken: -0.05
+      death: -10.0
+      noop: -0.01
+    builder:
+      block_placed: 2.0
+      repair_pct: 0.1
+      damage_taken: -0.05
+      death: -10.0
+      noop: -0.01
+    global_modes:
+      defend_coeff: -0.05
+      attack_coeff: 0.05
+      gather_coeff: 0.1

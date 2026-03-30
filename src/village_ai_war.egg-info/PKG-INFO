@@ -1,0 +1,50 @@
+Metadata-Version: 2.4
+Name: village-ai-war
+Version: 0.1.0
+Summary: 2D hierarchical RL environment (Gymnasium)
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4; extra == "dev"
+Requires-Dist: ruff>=0.1; extra == "dev"
+
+# Village AI War — 2D Hierarchical RL Environment
+
+Custom Gymnasium environment for hierarchical multi-agent reinforcement learning.
+
+## Architecture
+
+- **Bot Agents (Low Level):** Warriors, Gatherers, Farmers, Builders — PPO
+- **Village Agent (High Level):** Strategic manager — MaskablePPO
+- **Reward Shaping:** Dynamic global reward modes controlled by village agent
+
+## Quick Start
+
+```bash
+cd VillageAI_War
+pip install -r requirements.txt
+pip install -e .
+python scripts/run_game.py
+python scripts/run_training.py training.stage=1
+python scripts/run_training.py training.stage=2
+```
+
+## Training Stages
+
+- **Stage 1:** Train bot policies in isolation
+- **Stage 2:** Train village manager with frozen bots
+- **Stage 3:** Joint fine-tuning
+
+## Project Status
+
+- [x] Data structures (Pydantic)
+- [x] Map generator
+- [x] Economy system
+- [x] Combat system
+- [x] Building system
+- [x] Observation builders
+- [x] Reward calculators
+- [x] Action masker
+- [x] GameEnv (Gymnasium)
+- [x] Pygame renderer
+- [x] Training scripts

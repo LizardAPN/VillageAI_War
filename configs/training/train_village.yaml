@@ -1,0 +1,14 @@
+# @package _global_
+# Override via: python scripts/run_training.py --config-name=training/train_village
+training:
+  stage: 2
+  total_timesteps: 1000000
+  n_envs: 4
+  learning_rate: 3.0e-4
+  batch_size: 256
+  n_epochs: 10
+  gamma: 0.99
+  checkpoint_interval: 50000
+  log_dir: logs/
+  checkpoint_dir: checkpoints/
+  bot_joint_lr_factor: 0.1

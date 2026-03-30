@@ -1,0 +1,36 @@
+defaults:
+  - map
+  - economy
+  - combat
+  - buildings
+  - rewards/bot_rewards
+  - rewards/village_rewards
+  - training/train_bots
+  - _self_
+
+game:
+  max_ticks: 2000
+  manager_interval: 5
+  initial_resources:
+    wood: 200
+    stone: 100
+    food: 500
+  initial_bots: 10
+  initial_buildings:
+    - barracks
+    - storage
+  blueprint_adjacent_to_townhall: true
+  max_bots_for_role_change: 32
+
+logging:
+  use_wandb: true
+  project_name: village-ai-war
+  dashboard_interval: 100
+
+rendering:
+  cell_size: 24
+  fps: 10
+
+hydra:
+  run:
+    dir: logs/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
