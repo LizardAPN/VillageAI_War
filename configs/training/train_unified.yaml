@@ -28,6 +28,10 @@ unified:
   first_phase: bot
   push_to_pool: true
   progress_log_interval_sec: 30.0
+  # SB3 tqdm/rich bar for this learn(); needs tqdm + rich in requirements
+  progress_bar: true
+  # SB3 stdout tables; default pairs with progress_bar (quieter terminal)
+  sb3_verbose: 0
   plot_metrics_on_finish: true
 
 game:

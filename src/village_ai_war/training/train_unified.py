@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import math
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from loguru import logger
 from omegaconf import OmegaConf
 from sb3_contrib import MaskablePPO
@@ -58,8 +60,15 @@ def run_unified_training(cfg: Any) -> None:
     first_phase = str(ucfg.get("first_phase", "bot"))
     progress_log_interval_sec = float(ucfg.get("progress_log_interval_sec", 30.0))
     plot_metrics_on_finish = bool(ucfg.get("plot_metrics_on_finish", False))
+    use_progress_bar = bool(ucfg.get("progress_bar", True))
+    _sb3_v = ucfg.get("sb3_verbose")
+    if _sb3_v is not None:
+        sb3_verbose = int(_sb3_v)
+    else:
+        sb3_verbose = 0 if use_progress_bar else 1
 
     n_envs = int(tcfg["n_envs"])
+    n_steps_ppo = int(tcfg.get("n_steps", 2048))
     checkpoint_dir = Path(tcfg["checkpoint_dir"]) / "unified"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     bot_ckpt_path = checkpoint_dir / "bot_latest"
@@ -78,9 +87,11 @@ def run_unified_training(cfg: Any) -> None:
 
     per_cycle_steps = bot_steps + village_steps
     total_planned = n_cycles * per_cycle_steps
+    steps_per_sb3_iter = n_steps_ppo * n_envs
     logger.info(
         "Unified training plan | cycles={} | phases per cycle: bot {} env_steps, village {} | "
-        "n_envs={} | ~total env_steps={} | checkpoint_dir={} | tensorboard: bots={} village={}",
+        "n_envs={} | ~total env_steps={} | checkpoint_dir={} | tensorboard: bots={} village={} | "
+        "SB3 n_steps={} → ~{} env-steps per iteration | progress_bar={} | sb3_verbose={}",
         n_cycles,
         bot_steps,
         village_steps,
@@ -89,6 +100,10 @@ def run_unified_training(cfg: Any) -> None:
         checkpoint_dir,
         tb_log_bot or "(tensorboard off)",
         tb_log_vil or "(tensorboard off)",
+        n_steps_ppo,
+        steps_per_sb3_iter,
+        use_progress_bar,
+        sb3_verbose,
     )
 
     bot_policy_holder: dict[str, Any] = {"model": None}
@@ -115,9 +130,9 @@ def run_unified_training(cfg: Any) -> None:
     model_bot = PPO(
         RoleConditionedPolicy,
         bot_venv,
-        verbose=1,
+        verbose=sb3_verbose,
         learning_rate=float(tcfg["learning_rate"]),
-        n_steps=int(tcfg.get("n_steps", 2048)),
+        n_steps=n_steps_ppo,
         batch_size=int(tcfg["batch_size"]),
         n_epochs=int(tcfg["n_epochs"]),
         gamma=float(tcfg["gamma"]),
@@ -150,9 +165,9 @@ def run_unified_training(cfg: Any) -> None:
     model_vil = MaskablePPO(
         "MultiInputPolicy",
         vil_venv,
-        verbose=1,
+        verbose=sb3_verbose,
         learning_rate=float(tcfg["learning_rate"]),
-        n_steps=int(tcfg.get("n_steps", 2048)),
+        n_steps=n_steps_ppo,
         batch_size=int(tcfg["batch_size"]),
         n_epochs=int(tcfg["n_epochs"]),
         gamma=float(tcfg["gamma"]),
@@ -169,7 +184,17 @@ def run_unified_training(cfg: Any) -> None:
 
         for phase in phases:
             if phase == "bot":
-                logger.info("  Bot phase: {} steps", bot_steps)
+                logger.info("  Bot phase: {} env_steps", bot_steps)
+                est_bot_iters = max(1, math.ceil(bot_steps / steps_per_sb3_iter))
+                logger.info(
+                    "  Per-iteration: ~{} env_steps (n_steps={} × n_envs={}) | "
+                    "~{} SB3 iterations this phase | checkpoint every {} env_steps",
+                    steps_per_sb3_iter,
+                    n_steps_ppo,
+                    n_envs,
+                    est_bot_iters,
+                    save_freq_bot,
+                )
                 bot_policy_holder["model"] = model_bot
                 cb = CheckpointCallback(
                     save_freq=save_freq_bot,
@@ -189,6 +214,7 @@ def run_unified_training(cfg: Any) -> None:
                     callback=[cb, prog],
                     reset_num_timesteps=(cycle == 0 and phase == phases[0]),
                     tb_log_name="unified_bot",
+                    progress_bar=use_progress_bar,
                 )
                 model_bot.save(str(bot_ckpt_path))
                 # SelfPlayVillageEnv expects bot_final.zip inside bot_checkpoint_dir
@@ -199,7 +225,17 @@ def run_unified_training(cfg: Any) -> None:
                     bot_pool.add(Path(str(stem) + ".zip"))
 
             else:
-                logger.info("  Village phase: {} steps", village_steps)
+                logger.info("  Village phase: {} env_steps", village_steps)
+                est_vil_iters = max(1, math.ceil(village_steps / steps_per_sb3_iter))
+                logger.info(
+                    "  Per-iteration: ~{} env-steps (n_steps={} × n_envs={}) | "
+                    "~{} SB3 iterations this phase | checkpoint every {} env_steps",
+                    steps_per_sb3_iter,
+                    n_steps_ppo,
+                    n_envs,
+                    est_vil_iters,
+                    save_freq_vil,
+                )
                 cb = CheckpointCallback(
                     save_freq=save_freq_vil,
                     save_path=str(checkpoint_dir),
@@ -218,6 +254,7 @@ def run_unified_training(cfg: Any) -> None:
                     callback=[cb, prog],
                     reset_num_timesteps=(cycle == 0 and phase == phases[0]),
                     tb_log_name="unified_village",
+                    progress_bar=use_progress_bar,
                 )
                 model_vil.save(str(village_ckpt_path))
                 model_vil.save(str(checkpoint_dir / "village_final"))

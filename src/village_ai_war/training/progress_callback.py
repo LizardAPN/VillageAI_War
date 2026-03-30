@@ -10,7 +10,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 
 class UnifiedPhaseProgressCallback(BaseCallback):
-    """Log phase progress, ETA, and approximate env-steps/s at most every ``log_interval_sec``."""
+    """Log phase progress, ETA, env-steps/s, and SB3 iteration wall time (rollout+train)."""
 
     def __init__(
         self,
@@ -32,9 +32,17 @@ class UnifiedPhaseProgressCallback(BaseCallback):
         self._t0 = time.perf_counter()
         self._last_log_t = self._t0
         self._rollout_idx = 0
+        self._rollout_start_t: float | None = None
+        self._last_iter_wall_s: float | None = None
 
     def _on_step(self) -> bool:
         return True
+
+    def _on_rollout_start(self) -> None:
+        now = time.perf_counter()
+        if self._rollout_start_t is not None:
+            self._last_iter_wall_s = now - self._rollout_start_t
+        self._rollout_start_t = now
 
     def _on_rollout_end(self) -> None:
         assert self.model is not None
@@ -57,19 +65,44 @@ class UnifiedPhaseProgressCallback(BaseCallback):
         eta_sec = (elapsed / done) * remaining if done > 0 else 0.0
         fps = done / elapsed if elapsed > 0 else 0.0
 
-        logger.info(
-            "Unified progress | cycle {}/{} | phase {} | env_steps {}/{} ({:.1%}) | "
-            "elapsed {:.0f}s | ETA ~{:.0f}s | ~{:.1f} env_steps/s",
-            self.cycle_one_based,
-            self.n_cycles,
-            self.phase_name,
-            done,
-            self.steps_budget,
-            frac,
-            elapsed,
-            eta_sec,
-            fps,
+        iter_part = (
+            f" | prev_full_iter ~{self._last_iter_wall_s:.1f}s"
+            if self._last_iter_wall_s is not None
+            else ""
         )
+        if first:
+            logger.info(
+                "Unified progress | cycle {}/{} | phase {} | first rollout done | "
+                "env_steps {}/{} ({:.1%}) | elapsed {:.0f}s | ETA ~{:.0f}s | "
+                "~{:.1f} env_steps/s{} (first iter often slower — GPU warmup)",
+                self.cycle_one_based,
+                self.n_cycles,
+                self.phase_name,
+                done,
+                self.steps_budget,
+                frac,
+                elapsed,
+                eta_sec,
+                fps,
+                iter_part,
+            )
+        else:
+            logger.info(
+                "Unified progress | cycle {}/{} | phase {} | SB3 iter {} | "
+                "env_steps {}/{} ({:.1%}) | elapsed {:.0f}s | ETA ~{:.0f}s | "
+                "~{:.1f} env_steps/s{}",
+                self.cycle_one_based,
+                self.n_cycles,
+                self.phase_name,
+                self._rollout_idx,
+                done,
+                self.steps_budget,
+                frac,
+                elapsed,
+                eta_sec,
+                fps,
+                iter_part,
+            )
 
 
 def make_progress_callback(
