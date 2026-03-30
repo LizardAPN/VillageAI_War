@@ -67,6 +67,7 @@ class GameEnv(gym.Env):
         self._controlled_bot_id: int = 0
         self._opponent_controlled_bot_id: int = 0
         self._renderer: Any = None
+        self._last_tick_merged: dict[str, Any] = {}
         self._loaded_bot_policy: Any = None
         self._bot_policy_load_attempted: bool = False
 
@@ -463,6 +464,8 @@ class GameEnv(gym.Env):
                     else (False if won is not None and won != self.team else None),
                 )
             )
+
+        self._last_tick_merged = merged
 
         obs = self._build_obs()
         info = {

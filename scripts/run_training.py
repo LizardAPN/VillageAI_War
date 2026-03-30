@@ -18,6 +18,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from village_ai_war.training.train_bots_selfplay import run_bots_selfplay_training
 from village_ai_war.training.train_joint import run_joint_training
+from village_ai_war.training.train_unified import run_unified_training
 from village_ai_war.training.train_village_selfplay import run_village_selfplay_training
 
 
@@ -75,7 +76,9 @@ def main(cfg: DictConfig) -> None:
 
     stage = int(flat["training"]["stage"])
     logger.info("Starting training stage {}", stage)
-    if stage == 1:
+    if stage == 0:
+        run_unified_training(cfg)
+    elif stage == 1:
         run_bots_selfplay_training(cfg)
     elif stage == 2:
         run_village_selfplay_training(cfg)

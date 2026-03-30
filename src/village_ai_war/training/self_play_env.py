@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 from typing import Any, SupportsFloat
 
 import gymnasium as gym
 import numpy as np
+from gymnasium import spaces
 from loguru import logger
 from sb3_contrib import MaskablePPO
 from stable_baselines3 import PPO
 
+from village_ai_war.agents.bot_obs_builder import BotObsBuilder
 from village_ai_war.env.game_env import GameEnv
+from village_ai_war.rewards.bot_reward import BotRewardCalculator
+from village_ai_war.state import GlobalRewardMode
 
 
 def _as_plain_config(config: Mapping[str, Any] | Any) -> dict[str, Any]:
@@ -166,6 +170,195 @@ class SelfPlayVillageEnv(gym.Env):
         else:
             blue_action = int(self.inner.action_space.sample())
         return self.inner.step_village_only(int(action), blue_action, melee_intents)
+
+    def render(self) -> Any:
+        return self.inner.render()
+
+    def close(self) -> None:
+        self.inner.close()
+
+
+class UnifiedBotSelfPlayEnv(gym.Env):
+    """Full-game env for unified training: one bot on team 0 learns, everything else frozen.
+
+    Each tick mirrors ``SelfPlayVillageEnv`` (bots move, then both village managers act),
+    but the learner controls a single bot on team 0 and receives bot-level reward.
+
+    Frozen policies loaded from paths/pools:
+    * Other team-0 bots: ``bot_policy_holder["model"]`` (mutable dict shared with trainer).
+    * Team-1 bots: opponent pool ``checkpoints/pool/bots``.
+    * Red village manager: checkpoint at ``village_checkpoint_path`` (or random if missing).
+    * Blue village manager: opponent pool ``checkpoints/pool/village`` (or random).
+    """
+
+    def __init__(
+        self,
+        config: Mapping[str, Any] | Any,
+        bot_policy_holder: MutableMapping[str, Any] | None = None,
+        village_checkpoint_path: str = "checkpoints/unified/village_latest",
+        opponent_bot_pool_dir: str = "checkpoints/pool/bots",
+        opponent_village_pool_dir: str = "checkpoints/pool/village",
+        opponent_sampling: str = "uniform",
+    ) -> None:
+        super().__init__()
+        self._flat_cfg = _as_plain_config(config)
+        self.inner = GameEnv(self._flat_cfg, mode="village", team=0, render_mode=None)
+
+        self.action_space = spaces.Discrete(GameEnv.BOT_ACTIONS)
+        self.observation_space = spaces.Box(
+            low=0.0, high=1.0, shape=(BotObsBuilder.OBS_DIM,), dtype=np.float32,
+        )
+
+        self._bot_policy_holder = bot_policy_holder
+        self._village_ckpt_path = Path(village_checkpoint_path)
+        self._opponent_bot_pool_dir = Path(opponent_bot_pool_dir)
+        self._opponent_village_pool_dir = Path(opponent_village_pool_dir)
+        self._opponent_sampling = opponent_sampling
+
+        self._opponent_bot_policy: PPO | None = None
+        self._red_village_policy: MaskablePPO | None = None
+        self._blue_village_policy: MaskablePPO | None = None
+        self._controlled_bot_id: int = 0
+
+        self._load_opponent_bot()
+        self._load_red_village()
+        self._load_blue_village()
+
+    def _load_opponent_bot(self) -> None:
+        self._opponent_bot_pool_dir.mkdir(parents=True, exist_ok=True)
+        checkpoints = sorted(self._opponent_bot_pool_dir.glob("*.zip"))
+        if not checkpoints:
+            self._opponent_bot_policy = None
+            return
+        ckpt = checkpoints[-1] if self._opponent_sampling == "latest" else checkpoints[
+            int(np.random.randint(len(checkpoints)))
+        ]
+        try:
+            self._opponent_bot_policy = PPO.load(str(ckpt))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to load opponent bot policy from {}: {}", ckpt, e)
+            self._opponent_bot_policy = None
+
+    def _load_red_village(self) -> None:
+        for suffix in ("", ".zip"):
+            p = self._village_ckpt_path.parent / (self._village_ckpt_path.name + suffix)
+            if p.is_file():
+                try:
+                    self._red_village_policy = MaskablePPO.load(str(p))
+                    return
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Failed to load red village policy from {}: {}", p, e)
+        self._red_village_policy = None
+
+    def _load_blue_village(self) -> None:
+        self._opponent_village_pool_dir.mkdir(parents=True, exist_ok=True)
+        checkpoints = sorted(self._opponent_village_pool_dir.glob("*.zip"))
+        if not checkpoints:
+            self._blue_village_policy = None
+            return
+        ckpt = checkpoints[-1] if self._opponent_sampling == "latest" else checkpoints[
+            int(np.random.randint(len(checkpoints)))
+        ]
+        try:
+            self._blue_village_policy = MaskablePPO.load(str(ckpt))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to load blue village policy from {}: {}", ckpt, e)
+            self._blue_village_policy = None
+
+    def _pick_controlled_bot(self) -> None:
+        assert self.inner._state is not None
+        alive = [b for b in self.inner._state.villages[0].bots if b.is_alive]
+        self._controlled_bot_id = alive[0].bot_id if alive else 0
+
+    def reset(
+        self,
+        *,
+        seed: int | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
+        super().reset(seed=seed)
+        if self.np_random.random() < 0.1:
+            self._load_opponent_bot()
+            self._load_blue_village()
+        obs, info = self.inner.reset(seed=seed, options=options)
+        self._pick_controlled_bot()
+        bot_obs = self.inner._get_single_bot_obs(self._controlled_bot_id)
+        return bot_obs, info
+
+    def step(self, action: Any) -> tuple[np.ndarray, SupportsFloat, bool, bool, dict[str, Any]]:
+        assert self.inner._state is not None and self.inner._rng is not None
+        melee_intents: list[tuple[int, int, tuple[int, int]]] = []
+
+        # --- bot phase ---
+        learner_action = int(action)
+        self.inner._apply_bot_action(0, self._controlled_bot_id, learner_action, melee_intents)
+
+        friendly_policy = (
+            self._bot_policy_holder.get("model") if self._bot_policy_holder else None
+        )
+        for bot in self.inner._state.villages[0].bots:
+            if not bot.is_alive or bot.bot_id == self._controlled_bot_id:
+                continue
+            obs_b = self.inner._get_single_bot_obs(bot.bot_id)
+            if friendly_policy is not None:
+                a, _ = friendly_policy.predict(obs_b, deterministic=False)
+                act_int = int(np.asarray(a).reshape(-1)[0])
+            else:
+                act_int = int(self.inner._rng.integers(0, GameEnv.BOT_ACTIONS))
+            self.inner._apply_bot_action(0, bot.bot_id, act_int, melee_intents)
+
+        for bot in self.inner._state.villages[1].bots:
+            if not bot.is_alive:
+                continue
+            obs_b = self.inner._get_single_bot_obs(bot.bot_id)
+            if self._opponent_bot_policy is not None:
+                a, _ = self._opponent_bot_policy.predict(obs_b, deterministic=False)
+                act_int = int(np.asarray(a).reshape(-1)[0])
+            else:
+                act_int = int(self.inner._rng.integers(0, GameEnv.BOT_ACTIONS))
+            self.inner._apply_bot_action(1, bot.bot_id, act_int, melee_intents)
+
+        # --- village manager phase ---
+        red_masks = self.inner.action_masks(team=0)
+        if self._red_village_policy is not None:
+            red_obs = self.inner._get_village_obs(0)
+            red_act, _ = self._red_village_policy.predict(
+                red_obs, action_masks=red_masks, deterministic=False,
+            )
+            red_village_action = int(np.asarray(red_act).reshape(-1)[0])
+        else:
+            valid = np.flatnonzero(red_masks)
+            red_village_action = int(self.inner._rng.choice(valid)) if len(valid) else 0
+
+        blue_masks = self.inner.action_masks(team=1)
+        if self._blue_village_policy is not None:
+            blue_obs = self.inner._get_village_obs(1)
+            blue_act, _ = self._blue_village_policy.predict(
+                blue_obs, action_masks=blue_masks, deterministic=False,
+            )
+            blue_village_action = int(np.asarray(blue_act).reshape(-1)[0])
+        else:
+            valid = np.flatnonzero(blue_masks)
+            blue_village_action = int(self.inner._rng.choice(valid)) if len(valid) else 0
+
+        _, _, terminated, truncated, info = self.inner.step_village_only(
+            red_village_action, blue_village_action, melee_intents,
+        )
+
+        # --- bot-level obs & reward ---
+        bot_obs = self.inner._get_single_bot_obs(self._controlled_bot_id)
+        bot_state = next(
+            (b for b in self.inner._state.villages[0].bots if b.bot_id == self._controlled_bot_id),
+            None,
+        )
+        if bot_state is not None:
+            mode = self.inner._state.villages[0].global_reward_mode
+            bev = GameEnv._bot_events_for(bot_state, self.inner._last_tick_merged, learner_action)
+            reward = float(BotRewardCalculator.compute(bev, bot_state, mode, self.inner.config))
+        else:
+            reward = 0.0
+
+        return bot_obs, reward, terminated, truncated, info
 
     def render(self) -> Any:
         return self.inner.render()
