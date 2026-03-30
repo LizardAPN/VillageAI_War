@@ -19,6 +19,53 @@ from village_ai_war.rewards.bot_reward import BotRewardCalculator
 from village_ai_war.state import GlobalRewardMode
 
 
+def _maskable_village_obs_matches_env(policy: MaskablePPO, env_obs_space: gym.Space) -> bool:
+    """True if ``policy`` was trained on the same observation space as ``env_obs_space``."""
+    try:
+        return policy.observation_space == env_obs_space
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _obs_map_tensor_shape(obs_space: gym.Space) -> tuple[int, ...] | None:
+    """Shape of the ``map`` tensor in a village Dict obs space, or ``None``."""
+    if isinstance(obs_space, spaces.Dict) and "map" in obs_space.spaces:
+        m = obs_space.spaces["map"]
+        if isinstance(m, spaces.Box):
+            return tuple(int(x) for x in m.shape)
+    return None
+
+
+# One WARNING per (policy map shape, env map shape): many envs/zips share the same mismatch.
+_village_obs_mismatch_warned_shapes: set[
+    tuple[tuple[int, ...] | None, tuple[int, ...] | None]
+] = set()
+
+
+def _warn_village_obs_mismatch_once(
+    path: Path,
+    *,
+    role: str,
+    policy_space: gym.Space,
+    env_space: gym.Space,
+) -> None:
+    pshape = _obs_map_tensor_shape(policy_space)
+    eshape = _obs_map_tensor_shape(env_space)
+    sig = (pshape, eshape)
+    if sig in _village_obs_mismatch_warned_shapes:
+        return
+    _village_obs_mismatch_warned_shapes.add(sig)
+    logger.warning(
+        "Village checkpoints do not match env obs (first hit: {} side, example {}): "
+        "policy {} != env {}; further incompatible zips are skipped without extra logs. "
+        "Using random village manager actions until compatible checkpoints exist.",
+        role,
+        path,
+        policy_space,
+        env_space,
+    )
+
+
 def _as_plain_config(config: Mapping[str, Any] | Any) -> dict[str, Any]:
     from omegaconf import OmegaConf
 
@@ -240,11 +287,21 @@ class UnifiedBotSelfPlayEnv(gym.Env):
             self._opponent_bot_policy = None
 
     def _load_red_village(self) -> None:
+        env_space = self.inner.observation_space
         for suffix in ("", ".zip"):
             p = self._village_ckpt_path.parent / (self._village_ckpt_path.name + suffix)
             if p.is_file():
                 try:
-                    self._red_village_policy = MaskablePPO.load(str(p))
+                    loaded = MaskablePPO.load(str(p))
+                    if not _maskable_village_obs_matches_env(loaded, env_space):
+                        _warn_village_obs_mismatch_once(
+                            p,
+                            role="red",
+                            policy_space=loaded.observation_space,
+                            env_space=env_space,
+                        )
+                        continue
+                    self._red_village_policy = loaded
                     return
                 except Exception as e:  # noqa: BLE001
                     logger.warning("Failed to load red village policy from {}: {}", p, e)
@@ -259,8 +316,19 @@ class UnifiedBotSelfPlayEnv(gym.Env):
         ckpt = checkpoints[-1] if self._opponent_sampling == "latest" else checkpoints[
             int(np.random.randint(len(checkpoints)))
         ]
+        env_space = self.inner.observation_space
         try:
-            self._blue_village_policy = MaskablePPO.load(str(ckpt))
+            loaded = MaskablePPO.load(str(ckpt))
+            if not _maskable_village_obs_matches_env(loaded, env_space):
+                _warn_village_obs_mismatch_once(
+                    ckpt,
+                    role="blue",
+                    policy_space=loaded.observation_space,
+                    env_space=env_space,
+                )
+                self._blue_village_policy = None
+                return
+            self._blue_village_policy = loaded
         except Exception as e:  # noqa: BLE001
             logger.warning("Failed to load blue village policy from {}: {}", ckpt, e)
             self._blue_village_policy = None

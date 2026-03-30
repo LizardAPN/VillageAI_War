@@ -15,6 +15,7 @@ from loguru import logger  # noqa: E402
 
 from village_ai_war.config_load import load_project_config  # noqa: E402
 from village_ai_war.env.game_env import GameEnv  # noqa: E402
+from village_ai_war.training.self_play_env import _maskable_village_obs_matches_env  # noqa: E402
 
 
 def _resolve_ckpt(path_str: str | None) -> Path | None:
@@ -96,6 +97,26 @@ def main() -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("pygame/human render unavailable ({}); using rgb_array off-screen", e)
         env = GameEnv(flat, mode="village", team=0, render_mode=None)
+
+    env_obs_space = env.observation_space
+    if red_model is not None and not _maskable_village_obs_matches_env(red_model, env_obs_space):
+        logger.warning(
+            "Red village checkpoint {} does not match game observation space (e.g. map.size); "
+            "policy obs {} != env {} — using random red manager actions",
+            village_path,
+            red_model.observation_space,
+            env_obs_space,
+        )
+        red_model = None
+    if blue_model is not None and not _maskable_village_obs_matches_env(blue_model, env_obs_space):
+        logger.warning(
+            "Blue village checkpoint {} does not match game observation space; "
+            "policy obs {} != env {} — using random blue manager actions",
+            opp_path,
+            blue_model.observation_space,
+            env_obs_space,
+        )
+        blue_model = None
 
     rng = np.random.default_rng(args.seed)
     obs, _ = env.reset(seed=args.seed)

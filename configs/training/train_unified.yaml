@@ -27,6 +27,8 @@ unified:
   village_steps_per_turn: 20000
   first_phase: bot
   push_to_pool: true
+  progress_log_interval_sec: 30.0
+  plot_metrics_on_finish: true
 
 game:
   initial_bots: 10

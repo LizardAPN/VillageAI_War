@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch training stages via Hydra (``training.stage`` 1 / 2 / 3)."""
+"""Launch training stages via Hydra (``training.stage`` 0 unified, 1–3 legacy)."""
 
 from __future__ import annotations
 
@@ -57,22 +57,6 @@ def main(cfg: DictConfig) -> None:
     """Dispatch to stage trainers."""
     _configure_run_log_file()
     flat = OmegaConf.to_container(cfg, resolve=True)
-    use_wb = bool(flat.get("logging", {}).get("use_wandb", False))
-    use_tb = bool(flat.get("logging", {}).get("use_tensorboard", True))
-    if use_wb:
-        try:
-            import importlib.util
-
-            import wandb
-
-            sync_tb = use_tb and importlib.util.find_spec("tensorboard") is not None
-            wandb.init(
-                project=str(flat.get("logging", {}).get("project_name", "village-ai-war")),
-                config=flat,
-                sync_tensorboard=sync_tb,
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning("wandb init failed: {}", e)
 
     stage = int(flat["training"]["stage"])
     logger.info("Starting training stage {}", stage)

@@ -94,15 +94,6 @@ def run_village_selfplay_training(cfg: Any) -> None:
         tensorboard_log=tb_log,
     )
 
-    callbacks_extra: list[Any] = []
-    if bool(flat.get("logging", {}).get("use_wandb", False)):
-        try:
-            from wandb.integration.sb3 import WandbCallback
-
-            callbacks_extra.append(WandbCallback(verbose=0))
-        except Exception as e:  # noqa: BLE001
-            logger.warning("WandbCallback unavailable: {}", e)
-
     save_freq = max(int(tcfg.get("checkpoint_interval", 25_000)) // n_envs, 1)
 
     user_eval_freq = int(tcfg.get("eval_freq", 10_000))
@@ -145,7 +136,6 @@ def run_village_selfplay_training(cfg: Any) -> None:
         cbs: list[Any] = [checkpoint_callback]
         if eval_callback is not None:
             cbs.append(eval_callback)
-        cbs.extend(callbacks_extra)
         model.learn(
             total_timesteps=steps_per_iter,
             callback=cbs,

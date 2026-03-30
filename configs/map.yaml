@@ -1,6 +1,6 @@
 # @package _global_
 map:
-  size: 24
+  size: 12
   seed: 42
   resource_density: 0.15
   mountain_density: 0.05

@@ -6,7 +6,6 @@ import importlib.util
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from loguru import logger
 from omegaconf import OmegaConf
 from sb3_contrib import MaskablePPO
@@ -17,6 +16,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
 
 from village_ai_war.models.role_conditioned_policy import RoleConditionedPolicy
 from village_ai_war.training.pool_manager import PoolManager
+from village_ai_war.training.progress_callback import make_progress_callback
 from village_ai_war.training.self_play_env import SelfPlayVillageEnv, UnifiedBotSelfPlayEnv
 
 
@@ -56,6 +56,8 @@ def run_unified_training(cfg: Any) -> None:
     village_steps = int(ucfg.get("village_steps_per_turn", 20_000))
     push_to_pool = bool(ucfg.get("push_to_pool", True))
     first_phase = str(ucfg.get("first_phase", "bot"))
+    progress_log_interval_sec = float(ucfg.get("progress_log_interval_sec", 30.0))
+    plot_metrics_on_finish = bool(ucfg.get("plot_metrics_on_finish", False))
 
     n_envs = int(tcfg["n_envs"])
     checkpoint_dir = Path(tcfg["checkpoint_dir"]) / "unified"
@@ -72,6 +74,22 @@ def run_unified_training(cfg: Any) -> None:
 
     tb_log_bot = _tensorboard_log_dir(flat, tcfg, "unified_bots")
     tb_log_vil = _tensorboard_log_dir(flat, tcfg, "unified_village")
+    log_root = Path(tcfg["log_dir"]).resolve()
+
+    per_cycle_steps = bot_steps + village_steps
+    total_planned = n_cycles * per_cycle_steps
+    logger.info(
+        "Unified training plan | cycles={} | phases per cycle: bot {} env_steps, village {} | "
+        "n_envs={} | ~total env_steps={} | checkpoint_dir={} | tensorboard: bots={} village={}",
+        n_cycles,
+        bot_steps,
+        village_steps,
+        n_envs,
+        total_planned,
+        checkpoint_dir,
+        tb_log_bot or "(tensorboard off)",
+        tb_log_vil or "(tensorboard off)",
+    )
 
     bot_policy_holder: dict[str, Any] = {"model": None}
 
@@ -141,15 +159,6 @@ def run_unified_training(cfg: Any) -> None:
         tensorboard_log=tb_log_vil,
     )
 
-    # --- WandB callback (shared) ---
-    callbacks_extra: list[Any] = []
-    if bool(flat.get("logging", {}).get("use_wandb", False)):
-        try:
-            from wandb.integration.sb3 import WandbCallback
-            callbacks_extra.append(WandbCallback(verbose=0))
-        except Exception as e:  # noqa: BLE001
-            logger.warning("WandbCallback unavailable: {}", e)
-
     save_freq_bot = max(bot_steps // 4, 1)
     save_freq_vil = max(village_steps // 4, 1)
 
@@ -167,9 +176,17 @@ def run_unified_training(cfg: Any) -> None:
                     save_path=str(checkpoint_dir),
                     name_prefix=f"bot_cycle{cycle}",
                 )
+                prog = make_progress_callback(
+                    model_bot,
+                    phase_name="bot",
+                    cycle_zero_based=cycle,
+                    n_cycles=n_cycles,
+                    steps_budget=bot_steps,
+                    log_interval_sec=progress_log_interval_sec,
+                )
                 model_bot.learn(
                     total_timesteps=bot_steps,
-                    callback=[cb, *callbacks_extra],
+                    callback=[cb, prog],
                     reset_num_timesteps=(cycle == 0 and phase == phases[0]),
                     tb_log_name="unified_bot",
                 )
@@ -188,9 +205,17 @@ def run_unified_training(cfg: Any) -> None:
                     save_path=str(checkpoint_dir),
                     name_prefix=f"village_cycle{cycle}",
                 )
+                prog = make_progress_callback(
+                    model_vil,
+                    phase_name="village",
+                    cycle_zero_based=cycle,
+                    n_cycles=n_cycles,
+                    steps_budget=village_steps,
+                    log_interval_sec=progress_log_interval_sec,
+                )
                 model_vil.learn(
                     total_timesteps=village_steps,
-                    callback=[cb, *callbacks_extra],
+                    callback=[cb, prog],
                     reset_num_timesteps=(cycle == 0 and phase == phases[0]),
                     tb_log_name="unified_village",
                 )
@@ -206,3 +231,22 @@ def run_unified_training(cfg: Any) -> None:
     bot_venv.close()
     vil_venv.close()
     logger.info("Unified training complete — checkpoints in {}", checkpoint_dir)
+
+    if plot_metrics_on_finish:
+        try:
+            from village_ai_war.training.tensorboard_plots import plot_unified_tensorboard_runs
+
+            plot_out_dir = log_root / "plots"
+            try:
+                from hydra.core.hydra_config import HydraConfig
+
+                plot_out_dir = Path(HydraConfig.get().runtime.output_dir)
+            except Exception:  # noqa: BLE001
+                pass
+            plot_unified_tensorboard_runs(
+                log_root,
+                output_bots=plot_out_dir / "unified_bots_scalars.png",
+                output_village=plot_out_dir / "unified_village_scalars.png",
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("plot_metrics_on_finish failed: {}", e)

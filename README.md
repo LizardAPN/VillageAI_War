@@ -84,7 +84,7 @@ python scripts/run_training.py training=train_unified
 
 You can also set `training.stage=0` with another `training=` group; built-in defaults for `unified.*` still apply, but prefer `training=train_unified` so values in [`configs/training/train_unified.yaml`](configs/training/train_unified.yaml) are loaded.
 
-Configure macro steps with `unified.bot_steps_per_turn`, `unified.village_steps_per_turn`, `unified.n_cycles`, optional `unified.first_phase` (`bot` or `village`), and `unified.push_to_pool` (append snapshots to `checkpoints/pool/bots` and `.../village`) in [`configs/training/train_unified.yaml`](configs/training/train_unified.yaml). Outputs live under `checkpoints/unified/` (`bot_final.zip`, `village_final.zip`, plus per-cycle checkpoints and `bot_latest` / `village_latest` stems used between phases).
+Configure macro steps with `unified.bot_steps_per_turn`, `unified.village_steps_per_turn`, `unified.n_cycles`, optional `unified.first_phase` (`bot` or `village`), and `unified.push_to_pool` (append snapshots to `checkpoints/pool/bots` and `.../village`) in [`configs/training/train_unified.yaml`](configs/training/train_unified.yaml). `unified.progress_log_interval_sec` controls how often **Loguru** logs phase progress, ETA, and approximate env-steps/s (see `run_training.log` under the Hydra run directory). Set `unified.plot_metrics_on_finish: true` to write PNG grids of TensorBoard scalars into the same Hydra output folder when the run finishes (or run [`scripts/plot_tensorboard_scalars.py`](scripts/plot_tensorboard_scalars.py) manually). Outputs live under `checkpoints/unified/` (`bot_final.zip`, `village_final.zip`, plus per-cycle checkpoints and `bot_latest` / `village_latest` stems used between phases).
 
 The bot phase uses `DummyVecEnv` only so every sub-env shares the in-process `bot_policy_holder`; do not use `SubprocVecEnv` for that phase. Default `game.initial_bots: 1` matches stage 1; more red bots require a live model in the holder for the extra units.
 
@@ -93,10 +93,10 @@ Stages 1–3 remain a supported alternative pipeline.
 **Useful overrides**
 
 ```bash
-python scripts/run_training.py training.total_timesteps=2000 training.n_envs=1 logging.use_wandb=false
+python scripts/run_training.py training.total_timesteps=2000 training.n_envs=1
 ```
 
-### Metrics (TensorBoard / W&B)
+### Metrics (TensorBoard)
 
 With `logging.use_tensorboard: true` (default) and `tensorboard` installed, stage 1 and 2 write training scalars under `logs/bots/` and `logs/village/`; unified training writes under `logs/unified_bots/` and `logs/unified_village/`. Periodic evaluation logs `eval/mean_reward` (and related fields) under `logs/bots_eval/` and `logs/village_eval/` when `training.eval_freq > 0` (default `10000` **environment timesteps** between evals; internally scaled by `n_envs` per Stable-Baselines3). The unified config sets `eval_freq: 0` by default (no separate eval pass yet). Tune with `training.n_eval_episodes`.
 
@@ -104,7 +104,13 @@ With `logging.use_tensorboard: true` (default) and `tensorboard` installed, stag
 tensorboard --logdir logs/
 ```
 
-If `logging.use_wandb` is on, `wandb.init` uses `sync_tensorboard=True` when TensorBoard is available so the same scalars appear in W&B.
+After unified training (or anytime), generate static PNG grids from the latest run in each subfolder:
+
+```bash
+python scripts/plot_tensorboard_scalars.py --log-root logs
+```
+
+Default outputs: `logs/plots/unified_bots_scalars.png` and `logs/plots/unified_village_scalars.png` (or under the Hydra run directory when `unified.plot_metrics_on_finish` is enabled).
 
 **Best vs last checkpoint:** when evaluation is enabled and at least one eval run produced a best model, `checkpoints/bots/bot_final.zip` and `checkpoints/village/village_final.zip` are copies of the best eval checkpoint (also saved as `bot_best.zip` / `village_best.zip`). The last weights after all self-play iterations are kept as `bot_last.zip` / `village_last.zip`. Set `training.eval_freq=0` to keep the previous behavior (final = last iteration only). Stage 3 joint training does not add a separate eval pass yet; it still saves `checkpoints/joint/joint_final.zip` from the end of the run. Unified training always ends with `bot_final.zip` / `village_final.zip` as the last full save after all cycles (no best-model selection unless you add eval later).
 
@@ -133,7 +139,7 @@ python scripts/evaluate.py
 - [`src/village_ai_war/env/game_env.py`](src/village_ai_war/env/game_env.py) — `step`, `step_with_opponent`, `step_village_only`, optional `game.bot_rl_checkpoint` / `training.bot_checkpoint` for frozen bot PPO
 - [`src/village_ai_war/models/role_conditioned_policy.py`](src/village_ai_war/models/role_conditioned_policy.py)
 - [`src/village_ai_war/training/self_play_env.py`](src/village_ai_war/training/self_play_env.py) — `SelfPlayBotEnv`, `SelfPlayVillageEnv`, `UnifiedBotSelfPlayEnv`
-- [`src/village_ai_war/training/train_bots_selfplay.py`](src/village_ai_war/training/train_bots_selfplay.py), [`train_village_selfplay.py`](src/village_ai_war/training/train_village_selfplay.py), [`train_joint.py`](src/village_ai_war/training/train_joint.py), [`train_unified.py`](src/village_ai_war/training/train_unified.py)
+- [`src/village_ai_war/training/train_bots_selfplay.py`](src/village_ai_war/training/train_bots_selfplay.py), [`train_village_selfplay.py`](src/village_ai_war/training/train_village_selfplay.py), [`train_joint.py`](src/village_ai_war/training/train_joint.py), [`train_unified.py`](src/village_ai_war/training/train_unified.py), [`tensorboard_plots.py`](src/village_ai_war/training/tensorboard_plots.py), [`plot_tensorboard_scalars.py`](scripts/plot_tensorboard_scalars.py)
 
 Legacy trainers [`train_bots.py`](src/village_ai_war/training/train_bots.py) and [`train_village.py`](src/village_ai_war/training/train_village.py) are not used by [`scripts/run_training.py`](scripts/run_training.py).
 
