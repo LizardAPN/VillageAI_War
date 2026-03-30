@@ -10,6 +10,7 @@ import numpy as np
 from village_ai_war.state import (
     BuildingType,
     GameState,
+    GlobalRewardMode,
     ResourceLayer,
     Role,
     TerrainType,
@@ -36,6 +37,12 @@ _ROLE_RGB: dict[Role, tuple[float, float, float]] = {
 }
 
 _LEGEND_WIDTH_PX = 268
+# Khronos GL_SCISSOR_TEST (moderngl.Context has no SCISSOR_TEST flag alias)
+_GL_SCISSOR_TEST = 0x0C11
+_LEGEND_HUD_HEIGHT = 102
+_TEAM_HUD_RGB = ((255, 130, 130), (150, 185, 255))
+_HUD_ROW_BG = (30, 33, 44)
+_ACCENT_HUD = (92, 140, 220)
 
 
 def _terrain_height(t: int) -> float:
@@ -357,6 +364,165 @@ void main() {
 }
 """
 
+_VS_UI = """
+#version 330
+uniform mat4 ortho;
+in vec2 in_pos;
+in vec2 in_uv;
+out vec2 v_uv;
+void main() {
+    v_uv = in_uv;
+    gl_Position = ortho * vec4(in_pos, 0.0, 1.0);
+}
+"""
+
+_FS_UI = """
+#version 330
+uniform sampler2D tex0;
+in vec2 v_uv;
+out vec4 f_color;
+void main() {
+    f_color = texture(tex0, v_uv);
+}
+"""
+
+
+def _lerp_rgb_int(
+    a: tuple[int, int, int], b: tuple[int, int, int], t: float
+) -> tuple[int, int, int]:
+    t = min(1.0, max(0.0, t))
+    return (
+        int(a[0] + (b[0] - a[0]) * t),
+        int(a[1] + (b[1] - a[1]) * t),
+        int(a[2] + (b[2] - a[2]) * t),
+    )
+
+
+def _mode_label_ru(m: GlobalRewardMode) -> str:
+    return {
+        GlobalRewardMode.NEUTRAL: "нейтр.",
+        GlobalRewardMode.DEFEND: "защита",
+        GlobalRewardMode.ATTACK: "атака",
+        GlobalRewardMode.GATHER: "сбор",
+    }.get(m, "?")
+
+
+def _ortho_pixel(win_w: float, win_h: float) -> np.ndarray:
+    m = np.zeros((4, 4), dtype=np.float32)
+    m[0, 0] = 2.0 / win_w
+    m[1, 1] = 2.0 / win_h
+    m[0, 3] = -1.0
+    m[1, 3] = -1.0
+    m[2, 2] = -1.0
+    m[3, 3] = 1.0
+    return m
+
+
+def _draw_legend_hud(
+    surf: Any,
+    pygame: Any,
+    small: Any,
+    body: Any,
+    w: int,
+    h: int,
+    state: GameState,
+) -> None:
+    """Нижняя зона панели: тик, ресурсы и живые боты по командам."""
+    y0 = h - _LEGEND_HUD_HEIGHT
+    pygame.draw.rect(surf, (22, 24, 32), pygame.Rect(0, y0, w, _LEGEND_HUD_HEIGHT))
+    pygame.draw.line(surf, _ACCENT_HUD, (0, y0), (w, y0), 2)
+
+    win = state.winner
+    if win is None:
+        win_s = "идёт"
+    elif win == 0:
+        win_s = "RED"
+    elif win == 1:
+        win_s = "BLUE"
+    else:
+        win_s = "ничья"
+
+    yy = y0 + 6
+    head = f"тик {state.tick}/{state.max_ticks}  ·  {win_s}"
+    surf.blit(small.render(head, True, (200, 205, 220)), (10, yy))
+    yy += 16
+
+    names = ("КРАСНЫЙ", "СИНИЙ")
+    row_h = 32
+    for i, v in enumerate(state.villages[:2]):
+        col = _TEAM_HUD_RGB[i] if i < 2 else (200, 200, 210)
+        name = names[i] if i < len(names) else f"команда {v.team}"
+        r = v.resources
+        alive = sum(1 for b in v.bots if b.is_alive)
+        mode = _mode_label_ru(v.global_reward_mode)
+        panel = pygame.Rect(6, yy, w - 12, row_h)
+        pygame.draw.rect(surf, _HUD_ROW_BG, panel)
+        pygame.draw.rect(surf, _lerp_rgb_int(col, (255, 255, 255), 0.65), panel, 1)
+        pygame.draw.rect(surf, col, pygame.Rect(panel.left, panel.top, 3, panel.height))
+        line1 = f"{name}   боты {alive}/{v.pop_cap}   AI: {mode}"
+        line2 = f"дер. {r.wood}   кам. {r.stone}   еда {r.food}"
+        surf.blit(small.render(line1, True, col), (panel.left + 8, panel.top + 4))
+        surf.blit(body.render(line2, True, (210, 212, 220)), (panel.left + 8, panel.top + 17))
+        yy += row_h + 3
+
+
+def _add_building_variant(
+    buf: list[float],
+    wx: float,
+    wz: float,
+    base_h: float,
+    b: Any,
+    tr: float,
+    tg: float,
+    tb: float,
+) -> None:
+    hp_f = b.hp / max(b.max_hp, 1)
+    team = (tr, tg, tb)
+    roof = (min(tr * 1.12, 0.98), min(tg * 1.12, 0.98), min(tb * 1.12, 0.98))
+    bt = b.building_type
+
+    if bt == BuildingType.TOWNHALL:
+        h = 0.42 + 0.5 * hp_f
+        _add_cuboid(buf, wx, base_h + h * 0.5, wz, 0.78, h, 0.78, team)
+        _add_pyramid(buf, wx, base_h + h + 0.02, wz, 0.48, base_h + h + 0.42, roof)
+    elif bt == BuildingType.TOWER:
+        h = 0.55 + 0.5 * hp_f
+        _add_cuboid(buf, wx, base_h + h * 0.5, wz, 0.34, h, 0.34, team)
+        _add_pyramid(buf, wx, base_h + h + 0.02, wz, 0.12, base_h + h + 0.62, roof)
+    elif bt == BuildingType.BARRACKS:
+        h = 0.32 + 0.4 * hp_f
+        _add_cuboid(buf, wx, base_h + h * 0.48, wz, 0.88, h * 0.92, 0.68, team)
+        _add_cuboid(buf, wx, base_h + h + 0.1, wz, 0.55, 0.14, 0.42, roof)
+    elif bt == BuildingType.FARM:
+        h = 0.22 + 0.25 * hp_f
+        _add_cuboid(buf, wx, base_h + h * 0.5, wz, 0.85, h, 0.72, team)
+        _add_cylinder_y(
+            buf,
+            wx + 0.32,
+            base_h + h + 0.08,
+            wz,
+            0.12,
+            0.28,
+            10,
+            (0.85, 0.72, 0.42),
+            cap_top=True,
+            cap_bottom=True,
+        )
+    elif bt == BuildingType.WALL:
+        h = 0.18 + 0.2 * hp_f
+        _add_cuboid(buf, wx, base_h + h * 0.5, wz, 0.88, h, 0.22, team)
+    elif bt == BuildingType.CITADEL:
+        h = 0.5 + 0.45 * hp_f
+        _add_cuboid(buf, wx, base_h + h * 0.5, wz, 0.82, h, 0.82, team)
+        _add_pyramid(buf, wx, base_h + h + 0.02, wz, 0.52, base_h + h + 0.5, roof)
+    elif bt == BuildingType.STORAGE:
+        h = 0.3 + 0.35 * hp_f
+        _add_cuboid(buf, wx, base_h + h * 0.5, wz, 0.72, h, 0.72, team)
+        _add_cuboid(buf, wx - 0.08, base_h + h + 0.12, wz + 0.1, 0.38, 0.2, 0.38, roof)
+    else:
+        h = 0.35 + 0.45 * hp_f
+        _add_cuboid(buf, wx, base_h + h * 0.5 + 0.02, wz, 0.72, h, 0.72, team)
+
 
 def _install_linux_gl_soname_patch() -> Any:
     """moderngl loads ``libGL.so`` / ``libEGL.so``; Debian/Ubuntu ship ``libGL.so.1`` only.
@@ -404,7 +570,7 @@ def _install_linux_gl_soname_patch() -> Any:
 
 
 class Moderngl3DRenderer:
-    """Extruded terrain tiles, box buildings, sphere bots; orbit camera."""
+    """3D board: terrain columns, varied buildings, team+role bots, side legend texture."""
 
     def __init__(self, config: Mapping[str, Any], state: GameState | None) -> None:
         try:
@@ -422,12 +588,20 @@ class Moderngl3DRenderer:
         self._n = int(config["map"]["size"])
         self._win_w = int(rend.get("window_width_3d", 960))
         self._win_h = int(rend.get("window_height_3d", 720))
+        self._legend_w = int(rend.get("legend_width_3d", _LEGEND_WIDTH_PX))
+        self._map_vp_w = max(120, self._win_w - self._legend_w)
         self._fov = float(rend.get("camera_fov_deg", 50.0))
         self._dist_scale = float(rend.get("camera_dist_scale", 1.4))
-        self._auto_rotate = float(rend.get("auto_rotate_deg_per_sec", 10.0))
+        self._auto_rotate = float(rend.get("auto_rotate_deg_per_sec", 0.0))
         self._pitch_deg = float(rend.get("camera_pitch_deg", 32.0))
         self._yaw_deg = float(rend.get("camera_yaw_deg", 40.0))
         self._fps = max(1, int(rend.get("fps", 30)))
+        self._orbit_sens = float(rend.get("orbit_mouse_sensitivity", 0.35))
+        self._orbit_key_dps = float(rend.get("orbit_key_deg_per_sec", 72.0))
+        self._pitch_min = float(rend.get("camera_pitch_min_deg", 8.0))
+        self._pitch_max = float(rend.get("camera_pitch_max_deg", 85.0))
+        self._orbit_drag = False
+        self._orbit_last: tuple[int, int] = (0, 0)
 
         pygame.init()
         pygame.display.set_mode(
@@ -470,6 +644,138 @@ class Moderngl3DRenderer:
         self._terrain_sig: bytes | None = None
         self._clock = pygame.time.Clock()
         self._render_backend = "moderngl"
+
+        self._f_leg_title = pygame.font.SysFont("consolas", 16, bold=True)
+        self._f_leg_body = pygame.font.SysFont("consolas", 13)
+        self._f_leg_small = pygame.font.SysFont("consolas", 11)
+        self._tex_legend = self._ctx.texture((self._legend_w, self._win_h), 4)
+        if state is not None:
+            self._upload_legend_texture(state)
+        else:
+            blank = bytes([22, 24, 32, 255]) * (self._legend_w * self._win_h)
+            self._tex_legend.write(blank)
+
+        self._prog_ui = self._ctx.program(vertex_shader=_VS_UI, fragment_shader=_FS_UI)
+        mx = float(self._map_vp_w)
+        ww = float(self._win_w)
+        wh = float(self._win_h)
+        ui_data = np.array(
+            [
+                mx,
+                0.0,
+                0.0,
+                1.0,
+                ww,
+                0.0,
+                1.0,
+                1.0,
+                ww,
+                wh,
+                1.0,
+                0.0,
+                mx,
+                0.0,
+                0.0,
+                1.0,
+                ww,
+                wh,
+                1.0,
+                0.0,
+                mx,
+                wh,
+                0.0,
+                0.0,
+            ],
+            dtype=np.float32,
+        )
+        self._vbo_ui = self._ctx.buffer(ui_data.tobytes())
+        self._vao_ui = self._ctx.vertex_array(
+            self._prog_ui,
+            [(self._vbo_ui, "2f 2f", "in_pos", "in_uv")],
+        )
+
+    def _upload_legend_texture(self, state: GameState) -> None:
+        """Легенда (статика) + нижний HUD с ресурсами и ботами; каждый кадр из ``render``."""
+        pygame = self._pygame
+        surf = pygame.Surface((self._legend_w, self._win_h))
+        surf.fill((22, 24, 32))
+        title = self._f_leg_title
+        body = self._f_leg_body
+        small = self._f_leg_small
+        y = 10
+        hud_top = self._win_h - _LEGEND_HUD_HEIGHT
+
+        def bl(txt: str, dy: int, color: tuple[int, int, int], font: Any = body) -> None:
+            nonlocal y
+            if y > hud_top - 8:
+                return
+            surf.blit(font.render(txt, True, color), (12, y))
+            y += dy
+
+        bl("Легенда (3D)", 22, (245, 248, 255), title)
+        bl("Боты", 16, (120, 170, 230), small)
+        bl("Низ — команда (диск)", 16, (200, 200, 210))
+        bl("Сфера — роль (W/G/F/B)", 16, (200, 200, 210))
+        bl("Кольцо — снова команда", 16, (200, 200, 210))
+        y += 4
+        for i, label in enumerate(("RED (0)", "BLUE (1)")):
+            if y > hud_top - 24:
+                break
+            c = tuple(int(255 * x) for x in _TEAM_NEON[i])
+            pygame.draw.ellipse(surf, c, pygame.Rect(12, y, 22, 14))
+            pygame.draw.rect(surf, (60, 65, 80), pygame.Rect(12, y, 22, 14), 1)
+            surf.blit(body.render(label, True, (220, 222, 230)), (40, y - 1))
+            y += 20
+        y += 6
+        bl("Роли (сфера)", 16, (120, 170, 230), small)
+        for role, lab in (
+            (Role.WARRIOR, "W  воин (оранж.)"),
+            (Role.GATHERER, "G  сборщик"),
+            (Role.FARMER, "F  фермер"),
+            (Role.BUILDER, "B  строитель"),
+        ):
+            if y > hud_top - 22:
+                break
+            rr, rg, rb = _ROLE_RGB[role]
+            c = (int(rr * 255), int(rg * 255), int(rb * 255))
+            pygame.draw.circle(surf, c, (23, y + 7), 7)
+            pygame.draw.circle(surf, (40, 44, 55), (23, y + 7), 7, 1)
+            surf.blit(body.render(lab, True, (210, 212, 220)), (38, y))
+            y += 20
+        y += 6
+        bl("Ландшафт", 16, (120, 170, 230), small)
+        terrain_order = (
+            TerrainType.GRASS,
+            TerrainType.FOREST,
+            TerrainType.MOUNTAIN,
+            TerrainType.STONE_DEPOSIT,
+            TerrainType.FIELD,
+        )
+        names = {
+            int(TerrainType.GRASS): "трава",
+            int(TerrainType.FOREST): "лес",
+            int(TerrainType.MOUNTAIN): "гора",
+            int(TerrainType.STONE_DEPOSIT): "камень",
+            int(TerrainType.FIELD): "поле",
+        }
+        for tt in terrain_order:
+            if y > hud_top - 20:
+                break
+            tr, tg, tb = _TERRAIN_COLOR[int(tt)]
+            c = (int(tr * 255), int(tg * 255), int(tb * 255))
+            pygame.draw.rect(surf, c, pygame.Rect(12, y, 18, 14))
+            pygame.draw.rect(surf, (50, 55, 70), pygame.Rect(12, y, 18, 14), 1)
+            surf.blit(body.render(names[int(tt)], True, (210, 212, 220)), (36, y - 1))
+            y += 18
+        y += 6
+        bl("Здания — цвет команды", 16, (120, 170, 230), small)
+        bl("TH купол, Tw шпиль, Fm силос", 16, (170, 175, 190), small)
+        bl("На карте: жёлтый маркер — ресурс", 16, (170, 175, 190), small)
+
+        _draw_legend_hud(
+            surf, pygame, small, body, self._legend_w, self._win_h, state
+        )
+        self._tex_legend.write(pygame.image.tobytes(surf, "RGBA"))
 
     def _grid_to_world(self, gx: int, gz: int) -> tuple[float, float]:
         n = self._n
@@ -524,13 +830,7 @@ class Moderngl3DRenderer:
                 wx, wz = self._grid_to_world(int(bx), int(bz))
                 t = int(state.terrain[int(bz)][int(bx)])
                 base_h = _terrain_height(t)
-                hp_f = b.hp / max(b.max_hp, 1)
-                h = 0.35 + 0.45 * hp_f
-                if b.building_type == BuildingType.TOWNHALL:
-                    h += 0.15
-                elif b.building_type == BuildingType.TOWER:
-                    h += 0.25
-                _add_cuboid(buf, wx, base_h + h * 0.5 + 0.02, wz, 0.72, h, 0.72, (tr, tg, tb))
+                _add_building_variant(buf, wx, wz, base_h, b, tr, tg, tb)
 
         for v in state.villages:
             for bot in v.bots:
@@ -540,15 +840,15 @@ class Moderngl3DRenderer:
                 wx, wz = self._grid_to_world(int(bx), int(bz))
                 t = int(state.terrain[int(bz)][int(bx)])
                 base_h = _terrain_height(t)
-                rr, rg, rb = _ROLE_RGB.get(bot.role, (0.8, 0.8, 0.8))
-                tr, tg, tb = _TEAM_RGB[v.team] if v.team < 2 else (0.7, 0.7, 0.7)
-                mix = (
-                    0.58 * rr + 0.42 * tr,
-                    0.58 * rg + 0.42 * tg,
-                    0.58 * rb + 0.42 * tb,
-                )
-                cy = base_h + 0.28
-                _add_sphere(buf, wx, cy, wz, 0.24, mix)
+                team_idx = v.team
+                tn = _TEAM_NEON[team_idx] if team_idx < 2 else (0.55, 0.55, 0.58)
+                rr, rg, rb = _ROLE_RGB.get(bot.role, (0.85, 0.85, 0.88))
+                pad = base_h
+                _add_cylinder_y(buf, wx, pad, wz, 0.33, 0.09, 12, tn, cap_top=True, cap_bottom=True)
+                body_y = pad + 0.09 + 0.15
+                _add_sphere(buf, wx, body_y, wz, 0.155, (rr, rg, rb), stacks=4, slices=8)
+                ring_y = pad + 0.09 + 0.13
+                _add_cylinder_y(buf, wx, ring_y, wz, 0.23, 0.04, 16, tn, cap_top=True, cap_bottom=True)
 
         return np.asarray(buf, dtype=np.float32)
 
@@ -566,18 +866,22 @@ class Moderngl3DRenderer:
             ],
             dtype=np.float32,
         )
-        proj = perspective(self._fov, self._win_w / max(self._win_h, 1), 0.1, 200.0)
+        proj = perspective(self._fov, self._map_vp_w / max(self._win_h, 1), 0.1, 200.0)
         view = look_at(eye, center, np.array([0.0, 1.0, 0.0], dtype=np.float32))
         return _mul4(proj, view)
 
     def render(self, state: GameState, mode: str) -> np.ndarray | None:
         import pygame
 
+        self._upload_legend_texture(state)
         self._build_static_terrain(state)
         dyn = self._build_dynamic_geometry(state)
         vp = self._view_proj()
 
-        self._ctx.clear(0.12, 0.14, 0.20)
+        self._ctx.enable_direct(_GL_SCISSOR_TEST)
+        self._ctx.scissor = (0, 0, self._map_vp_w, self._win_h)
+        self._ctx.viewport = (0, 0, self._map_vp_w, self._win_h)
+        self._ctx.clear(0.11, 0.12, 0.17)
         self._prog["vp"].write(np.ascontiguousarray(vp.T, dtype=np.float32).tobytes())
 
         assert self._vao is not None
@@ -593,17 +897,56 @@ class Moderngl3DRenderer:
             dyn_vao.release()
             dyn_vbo.release()
 
+        self._ctx.scissor = None
+        self._ctx.disable_direct(_GL_SCISSOR_TEST)
+        self._ctx.viewport = (0, 0, self._win_w, self._win_h)
+        self._ctx.disable(self._moderngl.DEPTH_TEST)
+        ortho = _ortho_pixel(float(self._win_w), float(self._win_h))
+        self._prog_ui["ortho"].write(np.ascontiguousarray(ortho.T, dtype=np.float32).tobytes())
+        self._tex_legend.use(0)
+        self._prog_ui["tex0"] = 0
+        self._vao_ui.render()
+        self._ctx.enable(self._moderngl.DEPTH_TEST)
+
         pygame.display.flip()
-        pygame.event.pump()
 
         dt_ms = self._clock.tick(self._fps)
-        self._yaw_deg += self._auto_rotate * (dt_ms / 1000.0)
+        dt = dt_ms / 1000.0
+        for event in pygame.event.get():
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if event.pos[0] < self._map_vp_w:
+                    self._orbit_drag = True
+                    self._orbit_last = (event.pos[0], event.pos[1])
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                self._orbit_drag = False
+            elif event.type == pygame.MOUSEMOTION and self._orbit_drag:
+                x, y = event.pos[0], event.pos[1]
+                lx, ly = self._orbit_last
+                self._yaw_deg += (x - lx) * self._orbit_sens
+                self._pitch_deg -= (y - ly) * self._orbit_sens
+                self._pitch_deg = max(self._pitch_min, min(self._pitch_max, self._pitch_deg))
+                self._orbit_last = (x, y)
+
+        keys = pygame.key.get_pressed()
+        k = self._orbit_key_dps * dt
+        if keys[pygame.K_LEFT]:
+            self._yaw_deg -= k
+        if keys[pygame.K_RIGHT]:
+            self._yaw_deg += k
+        if keys[pygame.K_UP]:
+            self._pitch_deg = max(self._pitch_min, self._pitch_deg - k)
+        if keys[pygame.K_DOWN]:
+            self._pitch_deg = min(self._pitch_max, self._pitch_deg + k)
+
+        if self._auto_rotate != 0.0:
+            self._yaw_deg += self._auto_rotate * dt
         self._yaw_deg %= 360.0
 
         win = state.winner
         win_s = "…" if win is None else ("Red" if win == 0 else "Blue" if win == 1 else "draw")
         pygame.display.set_caption(
-            f"Village AI War — 3D | tick {state.tick}/{state.max_ticks} | {win_s}"
+            f"Village AI War — 3D | tick {state.tick}/{state.max_ticks} | {win_s} | "
+            "LMB drag: orbit · arrows: camera"
         )
 
         if mode == "rgb_array_3d":
@@ -614,6 +957,18 @@ class Moderngl3DRenderer:
         return None
 
     def close(self) -> None:
+        if getattr(self, "_vao_ui", None) is not None:
+            self._vao_ui.release()
+            self._vao_ui = None
+        if getattr(self, "_vbo_ui", None) is not None:
+            self._vbo_ui.release()
+            self._vbo_ui = None
+        if getattr(self, "_tex_legend", None) is not None:
+            self._tex_legend.release()
+            self._tex_legend = None
+        if getattr(self, "_prog_ui", None) is not None:
+            self._prog_ui.release()
+            self._prog_ui = None
         if self._vao is not None:
             self._vao.release()
             self._vao = None
