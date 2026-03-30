@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import warnings
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,7 @@ from loguru import logger  # noqa: E402
 
 from village_ai_war.config_load import load_project_config  # noqa: E402
 from village_ai_war.env.game_env import GameEnv  # noqa: E402
+from village_ai_war.training.self_play_env import _maskable_village_obs_matches_env  # noqa: E402
 
 
 def _resolve_ckpt(path_str: str | None) -> Path | None:
@@ -27,6 +29,11 @@ def _resolve_ckpt(path_str: str | None) -> Path | None:
 
 
 def main() -> None:
+    warnings.filterwarnings(
+        "ignore",
+        category=UserWarning,
+        module="pygame.pkgdata",
+    )
     parser = argparse.ArgumentParser(description="Run Village AI War with optional RL checkpoints.")
     parser.add_argument(
         "--village-checkpoint",
@@ -49,6 +56,11 @@ def main() -> None:
         "--deterministic",
         action="store_true",
         help="Use deterministic policy.predict for loaded MaskablePPO.",
+    )
+    parser.add_argument(
+        "--human-3d",
+        action="store_true",
+        help="OpenGL 3D board (moderngl + pygame); needs pip install moderngl and a working display.",
     )
     args = parser.parse_args()
 
@@ -91,15 +103,71 @@ def main() -> None:
         except Exception as e:  # noqa: BLE001
             logger.warning("Could not load bot policy ({}); using random bot moves", e)
 
+    render_mode = "human_3d" if args.human_3d else "human"
     try:
-        env = GameEnv(flat, mode="village", team=0, render_mode="human")
+        env = GameEnv(flat, mode="village", team=0, render_mode=render_mode)
     except Exception as e:  # noqa: BLE001
-        logger.warning("pygame/human render unavailable ({}); using rgb_array off-screen", e)
+        logger.warning(
+            "Display render unavailable ({}); falling back to no window",
+            e,
+        )
         env = GameEnv(flat, mode="village", team=0, render_mode=None)
+
+    env_obs_space = env.observation_space
+    if red_model is not None and not _maskable_village_obs_matches_env(red_model, env_obs_space):
+        logger.warning(
+            "Red village checkpoint {} does not match game observation space (e.g. map.size); "
+            "policy obs {} != env {} — using random red manager actions",
+            village_path,
+            red_model.observation_space,
+            env_obs_space,
+        )
+        red_model = None
+    if blue_model is not None and not _maskable_village_obs_matches_env(blue_model, env_obs_space):
+        logger.warning(
+            "Blue village checkpoint {} does not match game observation space; "
+            "policy obs {} != env {} — using random blue manager actions",
+            opp_path,
+            blue_model.observation_space,
+            env_obs_space,
+        )
+        blue_model = None
 
     rng = np.random.default_rng(args.seed)
     obs, _ = env.reset(seed=args.seed)
     use_trained_tick = red_model is not None or blue_model is not None or bot_policy is not None
+
+    if env.render_mode == "human_3d":
+        try:
+            env.render()
+        except (OSError, RuntimeError) as e:
+            msg = str(e)
+            if (
+                "OpenGL libraries missing" in msg
+                or "Could not load OpenGL" in msg
+                or "libGL" in msg
+                or "libEGL" in msg
+                or "libgl.so" in msg.lower()
+                or "libegl.so" in msg.lower()
+            ):
+                logger.warning(
+                    "3D view failed ({}). Install OpenGL on Linux/WSL "
+                    "(e.g. sudo apt install -y libgl1 libegl1), or use 2D. "
+                    "Falling back to pygame window.",
+                    e,
+                )
+                env.close()
+                env = GameEnv(flat, mode="village", team=0, render_mode="human")
+                obs, _ = env.reset(seed=args.seed)
+            else:
+                raise
+
+    if env.render_mode is not None:
+        logger.info(
+            "Viewer render_mode={} | max_steps={} | close the window or Ctrl+C to stop early",
+            env.render_mode,
+            args.max_steps,
+        )
 
     for t in range(args.max_steps):
         if use_trained_tick:
@@ -130,7 +198,7 @@ def main() -> None:
             m = env.action_masks()
             a = int(rng.choice(np.flatnonzero(m)))
             obs, r, term, trunc, info = env.step(a)
-        if env.render_mode == "human":
+        if env.render_mode is not None:
             env.render()
         if term or trunc:
             logger.info("Done at t={} info={}", t, info)

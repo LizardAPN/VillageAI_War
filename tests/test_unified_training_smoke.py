@@ -1,4 +1,4 @@
-"""Smoke tests for GameEnv without display."""
+"""Smoke tests for the unified training env and village self-play with empty pools."""
 
 from typing import Any
 
@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("gymnasium")
 
-from village_ai_war.env.game_env import GameEnv
+from village_ai_war.training.self_play_env import SelfPlayVillageEnv, UnifiedBotSelfPlayEnv
 
 
 def _tiny_config() -> dict[str, Any]:
@@ -52,7 +52,7 @@ def _tiny_config() -> dict[str, Any]:
             "max_ticks": 50,
             "manager_interval": 5,
             "initial_resources": {"wood": 200, "stone": 100, "food": 500},
-            "initial_bots": 4,
+            "initial_bots": 1,
             "initial_buildings": ["barracks", "storage"],
             "blueprint_adjacent_to_townhall": True,
             "max_bots_for_role_change": 16,
@@ -93,74 +93,63 @@ def _tiny_config() -> dict[str, Any]:
     }
 
 
-def test_village_reset_step() -> None:
-    env = GameEnv(_tiny_config(), mode="village", team=0, render_mode=None)
-    obs, info = env.reset(seed=1)
+def test_unified_bot_env_reset_step(tmp_path: Any) -> None:
+    """UnifiedBotSelfPlayEnv should reset and step without errors using empty pools."""
+    cfg = _tiny_config()
+    env = UnifiedBotSelfPlayEnv(
+        cfg,
+        bot_policy_holder=None,
+        village_checkpoint_path=str(tmp_path / "no_village"),
+        opponent_bot_pool_dir=str(tmp_path / "pool_bots"),
+        opponent_village_pool_dir=str(tmp_path / "pool_village"),
+    )
+    obs, info = env.reset(seed=42)
+    assert obs.shape == (181,), f"Expected bot obs shape (181,), got {obs.shape}"
+    for _ in range(10):
+        action = int(np.random.randint(0, env.action_space.n))
+        obs, reward, terminated, truncated, info = env.step(action)
+        assert obs.shape == (181,)
+        assert isinstance(reward, float)
+        if terminated or truncated:
+            obs, info = env.reset(seed=43)
+    env.close()
+
+
+def test_unified_bot_env_multi_bots(tmp_path: Any) -> None:
+    """With initial_bots > 1, friendly bots fall back to random actions when holder is empty."""
+    cfg = _tiny_config()
+    cfg["game"]["initial_bots"] = 4
+    env = UnifiedBotSelfPlayEnv(
+        cfg,
+        bot_policy_holder={"model": None},
+        village_checkpoint_path=str(tmp_path / "no_village"),
+        opponent_bot_pool_dir=str(tmp_path / "pool_bots"),
+        opponent_village_pool_dir=str(tmp_path / "pool_village"),
+    )
+    obs, _ = env.reset(seed=7)
+    assert obs.shape == (181,)
+    for _ in range(5):
+        obs, r, term, trunc, _ = env.step(0)
+        if term or trunc:
+            obs, _ = env.reset(seed=8)
+    env.close()
+
+
+def test_selfplay_village_env_empty_pools(tmp_path: Any) -> None:
+    """SelfPlayVillageEnv should work with no bot checkpoint and empty opponent pool."""
+    cfg = _tiny_config()
+    env = SelfPlayVillageEnv(
+        cfg,
+        bot_checkpoint_dir=str(tmp_path / "no_bots"),
+        opponent_pool_dir=str(tmp_path / "pool_village"),
+    )
+    obs, _ = env.reset(seed=10)
     assert "map" in obs and "village" in obs
     masks = env.action_masks()
     assert masks.any()
-    obs2, r, term, trunc, info2 = env.step(0)
-    assert isinstance(r, float)
-    assert "kills_this_tick" in info2
-
-
-def test_bot_reset_step() -> None:
-    env = GameEnv(_tiny_config(), mode="bot", team=0, render_mode=None)
-    obs, _ = env.reset(seed=2)
-    assert obs.shape == (181,)
-    obs2, r, term, trunc, _ = env.step(0)
-    assert len(obs2) == 181
-
-
-def test_step_with_opponent_and_action_masks_team() -> None:
-    cfg = _tiny_config()
-    cfg["game"]["initial_bots"] = 1
-    env = GameEnv(cfg, mode="bot", team=0, render_mode=None)
-    env.reset(seed=0)
-    obs, r, term, trunc, info = env.step_with_opponent(0, 0)
-    assert obs.shape == (181,)
-    assert "kills_this_tick" in info
-    assert "winner" in info
-
-    venv = GameEnv(cfg, mode="village", team=0, render_mode=None)
-    venv.reset(seed=0)
-    m0 = venv.action_masks()
-    m1 = venv.action_masks(team=1)
-    assert m0.shape == m1.shape
-    assert m0.dtype == bool
-
-
-def test_mutual_extinction_terminates_episode() -> None:
-    """Both teams with zero alive bots must end the episode (terminated), not run forever."""
-    env = GameEnv(_tiny_config(), mode="village", team=0, render_mode=None)
-    env.reset(seed=0)
-    assert env._state is not None
-    env._state.tick = 1  # not a manager tick; only noop village actions valid
-    for v in env._state.villages:
-        for b in v.bots:
-            b.is_alive = False
-    m0 = env.action_masks(team=0)
-    m1 = env.action_masks(team=1)
-    a0 = int(np.argmax(m0))
-    a1 = int(np.argmax(m1))
-    _obs, _r, term, trunc, info = env.run_bots_then_village_decisions(None, a0, a1)
-    assert term is True
-    assert trunc is False
-    assert info.get("winner") is None
-
-
-def test_get_village_observation_and_run_bots_then_village() -> None:
-    env = GameEnv(_tiny_config(), mode="village", team=0, render_mode=None)
-    env.reset(seed=3)
-    o0 = env.get_village_observation(0)
-    o1 = env.get_village_observation(1)
-    assert "map" in o0 and "village" in o0
-    assert o0["map"].shape == o1["map"].shape
-    m0 = env.action_masks(team=0)
-    m1 = env.action_masks(team=1)
-    a0 = int(np.flatnonzero(m0)[0])
-    a1 = int(np.flatnonzero(m1)[0])
-    obs, r, term, trunc, info = env.run_bots_then_village_decisions(None, a0, a1)
-    assert "map" in obs and "village" in obs
-    assert isinstance(r, float)
-    assert "kills_this_tick" in info
+    for _ in range(5):
+        action = int(np.flatnonzero(env.action_masks())[0])
+        obs, r, term, trunc, _ = env.step(action)
+        if term or trunc:
+            obs, _ = env.reset(seed=11)
+    env.close()

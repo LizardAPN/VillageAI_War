@@ -23,14 +23,24 @@ game:
   max_bots_for_role_change: 32
 
 logging:
-  use_wandb: false
   use_tensorboard: true
-  project_name: village-ai-war
-  dashboard_interval: 100
 
 rendering:
   cell_size: 24
-  fps: 10
+  fps: 5
+  # 3D view (render_mode human_3d / rgb_array_3d)
+  window_width_3d: 960
+  window_height_3d: 720
+  legend_width_3d: 268
+  camera_fov_deg: 50
+  camera_dist_scale: 1.4
+  camera_pitch_deg: 32
+  camera_yaw_deg: 40
+  # 0 = fixed / mouse+keys only; set e.g. 10 for idle spin
+  auto_rotate_deg_per_sec: 0
+  # Left-drag on the map: degrees per pixel; arrow keys use orbit_key_deg_per_sec
+  orbit_mouse_sensitivity: 0.35
+  orbit_key_deg_per_sec: 72
 
 hydra:
   run:

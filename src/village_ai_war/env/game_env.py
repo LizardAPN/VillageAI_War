@@ -40,10 +40,10 @@ class GameEnv(gym.Env):
         config: Hydra/OmegaConf merged config (dict-like).
         mode: ``"bot"`` | ``"village"`` | ``"full"``.
         team: Learning team index (``0`` red, ``1`` blue).
-        render_mode: ``"human"`` | ``"rgb_array"`` | ``None``.
+        render_mode: ``"human"`` | ``"human_3d"`` | ``"rgb_array"`` | ``"rgb_array_3d"`` | ``None``.
     """
 
-    metadata = {"render_modes": ["human", "rgb_array"]}
+    metadata = {"render_modes": ["human", "human_3d", "rgb_array", "rgb_array_3d"]}
 
     BOT_ACTIONS = 12
     _DIRS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
@@ -67,6 +67,7 @@ class GameEnv(gym.Env):
         self._controlled_bot_id: int = 0
         self._opponent_controlled_bot_id: int = 0
         self._renderer: Any = None
+        self._last_tick_merged: dict[str, Any] = {}
         self._loaded_bot_policy: Any = None
         self._bot_policy_load_attempted: bool = False
 
@@ -274,11 +275,26 @@ class GameEnv(gym.Env):
     def render(self) -> np.ndarray | None:
         if self.render_mode is None:
             return None
+        mode = cast(str, self.render_mode)
+        if self._renderer is not None:
+            tag = getattr(self._renderer, "_render_backend", "pygame")
+            want_3d = mode in ("human_3d", "rgb_array_3d")
+            if (tag == "pygame" and want_3d) or (tag == "moderngl" and not want_3d):
+                self._renderer.close()
+                self._renderer = None
+
+        if mode in ("human_3d", "rgb_array_3d"):
+            from village_ai_war.rendering.moderngl_3d_renderer import Moderngl3DRenderer
+
+            if self._renderer is None:
+                self._renderer = Moderngl3DRenderer(self.config, self._state)
+            return self._renderer.render(self._state, mode=mode)
+
         from village_ai_war.rendering.pygame_renderer import PygameRenderer
 
         if self._renderer is None:
             self._renderer = PygameRenderer(self.config, self._state)
-        return self._renderer.render(self._state, mode=cast(str, self.render_mode))
+        return self._renderer.render(self._state, mode=mode)
 
     def close(self) -> None:
         if self._renderer is not None:
@@ -427,6 +443,10 @@ class GameEnv(gym.Env):
         if state.tick >= state.max_ticks:
             truncated = True
             state.is_done = True
+        elif state.is_done:
+            # Draw (no alive bots on both sides), stagnation, etc.: ``won`` is None
+            # but the episode must still end for Gymnasium / UI.
+            terminated = True
 
         state.tick += 1
 
@@ -459,6 +479,8 @@ class GameEnv(gym.Env):
                     else (False if won is not None and won != self.team else None),
                 )
             )
+
+        self._last_tick_merged = merged
 
         obs = self._build_obs()
         info = {

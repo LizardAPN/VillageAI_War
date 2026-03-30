@@ -1,0 +1,38 @@
+# @package _global_
+# Unified training loop: alternating bot PPO and village MaskablePPO.
+# Use: python scripts/run_training.py training=train_unified
+training:
+  stage: 0
+  total_timesteps: 400000
+  n_envs: 8
+  n_steps: 512
+  learning_rate: 3.0e-3
+  batch_size: 256
+  n_epochs: 10
+  gamma: 0.95
+  gae_lambda: 0.95
+  clip_range: 0.1
+  ent_coef: 0.01
+  pool_max_size: 10
+  checkpoint_interval: 50000
+  eval_freq: 0
+  n_eval_episodes: 5
+  pool_dir: checkpoints/pool
+  checkpoint_dir: checkpoints
+  log_dir: logs
+
+unified:
+  n_cycles: 10
+  bot_steps_per_turn: 20000
+  village_steps_per_turn: 20000
+  first_phase: bot
+  push_to_pool: true
+  progress_log_interval_sec: 30.0
+  # SB3 tqdm/rich bar for this learn(); needs tqdm + rich in requirements
+  progress_bar: true
+  # SB3 stdout tables; default pairs with progress_bar (quieter terminal)
+  sb3_verbose: 0
+  plot_metrics_on_finish: true
+
+game:
+  initial_bots: 10
