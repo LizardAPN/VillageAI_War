@@ -3,7 +3,7 @@ economy:
   harvest_interval: 2
   harvest_amount: 8
   food_consumption: 1
-  hunger_damage: 2
+  hunger_damage: 0.1
   bot_cost:
     wood: 50
     food: 75
