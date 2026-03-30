@@ -23,7 +23,8 @@ game:
   max_bots_for_role_change: 32
 
 logging:
-  use_wandb: true
+  use_wandb: false
+  use_tensorboard: true
   project_name: village-ai-war
   dashboard_interval: 100
 

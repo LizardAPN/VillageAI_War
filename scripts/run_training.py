@@ -24,13 +24,18 @@ def main(cfg: DictConfig) -> None:
     """Dispatch to stage trainers."""
     flat = OmegaConf.to_container(cfg, resolve=True)
     use_wb = bool(flat.get("logging", {}).get("use_wandb", False))
+    use_tb = bool(flat.get("logging", {}).get("use_tensorboard", True))
     if use_wb:
         try:
+            import importlib.util
+
             import wandb
 
+            sync_tb = use_tb and importlib.util.find_spec("tensorboard") is not None
             wandb.init(
                 project=str(flat.get("logging", {}).get("project_name", "village-ai-war")),
                 config=flat,
+                sync_tensorboard=sync_tb,
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("wandb init failed: {}", e)

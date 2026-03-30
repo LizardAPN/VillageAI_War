@@ -8,6 +8,8 @@ training:
   n_epochs: 10
   gamma: 0.99
   checkpoint_interval: 50000
+  eval_freq: 10000
+  n_eval_episodes: 5
   log_dir: logs/
   checkpoint_dir: checkpoints/
   bot_joint_lr_factor: 0.1

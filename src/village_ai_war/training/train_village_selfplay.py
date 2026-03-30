@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import numpy as np
 from loguru import logger
 from omegaconf import OmegaConf
 from sb3_contrib import MaskablePPO
+from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
@@ -29,6 +31,18 @@ def _flat_cfg(cfg: Any) -> dict[str, Any]:
     if OmegaConf.is_config(cfg):
         return OmegaConf.to_container(cfg, resolve=True)  # type: ignore[return-value]
     return dict(cfg)
+
+
+def _tensorboard_log_dir(flat: dict[str, Any], tcfg: dict[str, Any], subdir: str) -> str | None:
+    if not bool(flat.get("logging", {}).get("use_tensorboard", True)):
+        return None
+    if importlib.util.find_spec("tensorboard") is None:
+        logger.warning(
+            "logging.use_tensorboard is true but tensorboard is not installed; "
+            "training without tensorboard_log"
+        )
+        return None
+    return str(Path(tcfg["log_dir"]) / subdir)
 
 
 def run_village_selfplay_training(cfg: Any) -> None:
@@ -66,9 +80,7 @@ def run_village_selfplay_training(cfg: Any) -> None:
         else DummyVecEnv([make_env(0)])
     )
 
-    tb_log: str | None = None
-    if importlib.util.find_spec("tensorboard") is not None:
-        tb_log = str(Path(tcfg["log_dir"]) / "village")
+    tb_log = _tensorboard_log_dir(flat, tcfg, "village")
 
     model = MaskablePPO(
         "MultiInputPolicy",
@@ -93,6 +105,36 @@ def run_village_selfplay_training(cfg: Any) -> None:
 
     save_freq = max(int(tcfg.get("checkpoint_interval", 25_000)) // n_envs, 1)
 
+    user_eval_freq = int(tcfg.get("eval_freq", 10_000))
+    eval_cb_freq = max(user_eval_freq // max(n_envs, 1), 1) if user_eval_freq > 0 else 0
+    eval_sampling = str(tcfg.get("eval_opponent_sampling", "latest"))
+
+    eval_callback: MaskableEvalCallback | None = None
+    eval_venv: DummyVecEnv | None = None
+    if eval_cb_freq > 0:
+
+        def make_eval_env() -> _MaskableMonitor:
+            env = SelfPlayVillageEnv(
+                flat,
+                bot_checkpoint_dir=bot_ckpt_dir,
+                opponent_pool_dir=str(pool_dir),
+                opponent_sampling=eval_sampling,
+            )
+            return _MaskableMonitor(env)
+
+        eval_venv = DummyVecEnv([make_eval_env])
+        eval_log = Path(tcfg["log_dir"]) / "village_eval"
+        best_path = checkpoint_dir / "best_village"
+        eval_callback = MaskableEvalCallback(
+            eval_venv,
+            best_model_save_path=str(best_path),
+            log_path=str(eval_log),
+            eval_freq=eval_cb_freq,
+            n_eval_episodes=int(tcfg.get("n_eval_episodes", 5)),
+            deterministic=True,
+            verbose=1,
+        )
+
     for iteration in range(iterations):
         logger.info("Village self-play iteration {} / {}", iteration + 1, iterations)
         checkpoint_callback = CheckpointCallback(
@@ -100,7 +142,10 @@ def run_village_selfplay_training(cfg: Any) -> None:
             save_path=str(checkpoint_dir),
             name_prefix=f"village_iter{iteration}",
         )
-        cbs = [checkpoint_callback, *callbacks_extra]
+        cbs: list[Any] = [checkpoint_callback]
+        if eval_callback is not None:
+            cbs.append(eval_callback)
+        cbs.extend(callbacks_extra)
         model.learn(
             total_timesteps=steps_per_iter,
             callback=cbs,
@@ -111,7 +156,24 @@ def run_village_selfplay_training(cfg: Any) -> None:
         model.save(str(stem))
         pool_manager.add(Path(str(stem) + ".zip"))
 
-    final_stem = checkpoint_dir / "village_final"
-    model.save(str(final_stem))
+    model.save(str(checkpoint_dir / "village_last"))
+    best_zip = checkpoint_dir / "best_village" / "best_model.zip"
+    if user_eval_freq > 0 and best_zip.is_file():
+        shutil.copy2(best_zip, checkpoint_dir / "village_best.zip")
+        shutil.copy2(best_zip, checkpoint_dir / "village_final.zip")
+        logger.info(
+            "Exported best eval policy to {} and {} (last weights: {}.zip)",
+            checkpoint_dir / "village_final.zip",
+            checkpoint_dir / "village_best.zip",
+            checkpoint_dir / "village_last",
+        )
+    else:
+        model.save(str(checkpoint_dir / "village_final"))
+        logger.info(
+            "Exported last-iteration policy to {}.zip (eval disabled or no best checkpoint yet)",
+            checkpoint_dir / "village_final",
+        )
+
+    if eval_venv is not None:
+        eval_venv.close()
     vec_env.close()
-    logger.info("Saved village policy to {}.zip", final_stem)

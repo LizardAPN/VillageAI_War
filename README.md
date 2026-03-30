@@ -73,7 +73,17 @@ python scripts/run_training.py training=train_joint training.stage=3
 python scripts/run_training.py training.total_timesteps=2000 training.n_envs=1 logging.use_wandb=false
 ```
 
-TensorBoard logging is enabled only if the `tensorboard` package is installed; otherwise training runs without `tensorboard_log`.
+### Metrics (TensorBoard / W&B)
+
+With `logging.use_tensorboard: true` (default) and `tensorboard` installed, stage 1 and 2 write training scalars under `logs/bots/` and `logs/village/`. Periodic evaluation logs `eval/mean_reward` (and related fields) under `logs/bots_eval/` and `logs/village_eval/` when `training.eval_freq > 0` (default `10000` **environment timesteps** between evals; internally scaled by `n_envs` per Stable-Baselines3). Tune with `training.n_eval_episodes`.
+
+```bash
+tensorboard --logdir logs/
+```
+
+If `logging.use_wandb` is on, `wandb.init` uses `sync_tensorboard=True` when TensorBoard is available so the same scalars appear in W&B.
+
+**Best vs last checkpoint:** when evaluation is enabled and at least one eval run produced a best model, `checkpoints/bots/bot_final.zip` and `checkpoints/village/village_final.zip` are copies of the best eval checkpoint (also saved as `bot_best.zip` / `village_best.zip`). The last weights after all self-play iterations are kept as `bot_last.zip` / `village_last.zip`. Set `training.eval_freq=0` to keep the previous behavior (final = last iteration only). Stage 3 joint training does not add a separate eval pass yet; it still saves `checkpoints/joint/joint_final.zip` from the end of the run.
 
 **Evaluation**
 
@@ -85,9 +95,9 @@ python scripts/evaluate.py
 
 | Path | Contents |
 |------|-----------|
-| `checkpoints/bots/bot_final.zip` | Stage 1 policy |
+| `checkpoints/bots/bot_final.zip` | Stage 1 policy (best eval mean reward when `training.eval_freq > 0`, else last iteration) |
 | `checkpoints/pool/bots/*.zip` | Historical bot policies for self-play |
-| `checkpoints/village/village_final.zip` | Stage 2 manager |
+| `checkpoints/village/village_final.zip` | Stage 2 manager (same best-vs-last rule as bots) |
 | `checkpoints/pool/village/*.zip` | Historical village policies for self-play |
 | `checkpoints/joint/joint_final.zip` | Stage 3 output |
 

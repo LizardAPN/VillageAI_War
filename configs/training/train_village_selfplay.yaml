@@ -13,6 +13,8 @@ training:
   gamma: 0.99
   pool_max_size: 10
   checkpoint_interval: 25000
+  eval_freq: 10000
+  n_eval_episodes: 5
   pool_dir: checkpoints/pool
   checkpoint_dir: checkpoints
   log_dir: logs
