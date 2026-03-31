@@ -36,14 +36,17 @@ def _tensorboard_log_dir(flat: dict[str, Any], tcfg: dict[str, Any], subdir: str
     return str(Path(tcfg["log_dir"]) / subdir)
 
 
-def run_mappo_bots_training(cfg: Any) -> None:
-    """MAPPO (PPO + centralized critic) with growing opponent checkpoint pool."""
+def run_mappo_bots_training(
+    cfg: Any, *, return_metrics: bool = False
+) -> dict[str, Any] | None:
+    """MAPPO (PPO + centralized critic) with a rolling pool of past MAPPO snapshots.
+
+    If ``return_metrics`` is True, returns ``win_frac`` and ``outcome_fractions`` from the
+    episode metrics callback; otherwise returns ``None``.
+    """
     flat = _flat_cfg(cfg)
     tcfg = flat["training"]
     pool_root = Path(tcfg["pool_dir"])
-    # Opponents must be 181-dim bot PPO zips in pool/bots/; MAPPO zips go elsewhere.
-    opponent_pool_dir = pool_root / "bots"
-    opponent_pool_dir.mkdir(parents=True, exist_ok=True)
     mappo_pool_dir = pool_root / str(tcfg.get("mappo_pool_subdir", "bots_mappo"))
     mappo_pool_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = Path(tcfg["checkpoint_dir"]) / "bots_mappo"
@@ -63,8 +66,6 @@ def run_mappo_bots_training(cfg: Any) -> None:
             return MAPPOBotEnv(
                 flat,
                 team=0,
-                opponent_pool_dir=str(opponent_pool_dir),
-                opponent_sampling=str(tcfg.get("opponent_sampling", "uniform")),
                 vec_env_index=_rank,
             )
 
@@ -133,3 +134,11 @@ def run_mappo_bots_training(cfg: Any) -> None:
     logger.info("Saved MAPPO policy to {}.zip", checkpoint_dir / "mappo_bot_final")
 
     vec_env.close()
+
+    if return_metrics:
+        fracs = metrics_cb.outcome_fractions()
+        return {
+            "win_frac": float(fracs.get("win", 0.0)),
+            "outcome_fractions": fracs,
+        }
+    return None

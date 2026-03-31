@@ -34,7 +34,7 @@ def pack_mappo_obs_slots(
     village0: np.ndarray,
     village1: np.ndarray,
 ) -> np.ndarray:
-    """Concatenate K local bot rows (K * 181), flattened map (team-0 POV), both village vectors."""
+    """Concatenate K local bot rows (K × ``mappo_local_dim()``), map flat, both village vectors."""
     flat_map = np.asarray(map_obs, dtype=np.float32).reshape(-1)
     v = np.concatenate(
         [np.asarray(village0, dtype=np.float32), np.asarray(village1, dtype=np.float32)],

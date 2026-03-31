@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import Any, SupportsFloat, cast
 
 import gymnasium as gym
@@ -68,8 +67,6 @@ class GameEnv(gym.Env):
         self._opponent_controlled_bot_id: int = 0
         self._renderer: Any = None
         self._last_tick_merged: dict[str, Any] = {}
-        self._loaded_bot_policy: Any = None
-        self._bot_policy_load_attempted: bool = False
         self._tick_start_positions: dict[int, tuple[int, int]] = {}
         self._prev_distances: dict[int, float] = {}
         self._tick_food_by_bot: dict[int, int] = {}
@@ -166,7 +163,6 @@ class GameEnv(gym.Env):
         if self.mode == "full" and state.tick % interval == 0:
             self._apply_village_decision(1 - self.team, {"kind": "noop"})
 
-        self._ensure_bot_policy_loaded()
         melee_intents: list[tuple[int, int, tuple[int, int]]] = []
         learner_bot_action: int | None = None
 
@@ -176,9 +172,9 @@ class GameEnv(gym.Env):
                 self.team, self._controlled_bot_id, learner_bot_action, melee_intents
             )
             ex = frozenset({(self.team, self._controlled_bot_id)})
-            self._step_all_bots_with_policy(self._loaded_bot_policy, melee_intents, exclude=ex)
+            self._step_all_bots_with_policy(None, melee_intents, exclude=ex)
         else:
-            self._step_all_bots_with_policy(self._loaded_bot_policy, melee_intents, exclude=None)
+            self._step_all_bots_with_policy(None, melee_intents, exclude=None)
 
         return self._advance_tick_after_bots(
             melee_intents,
@@ -222,8 +218,7 @@ class GameEnv(gym.Env):
                 (1, self._opponent_controlled_bot_id),
             }
         )
-        self._ensure_bot_policy_loaded()
-        self._step_all_bots_with_policy(self._loaded_bot_policy, melee_intents, exclude=ex)
+        self._step_all_bots_with_policy(None, melee_intents, exclude=ex)
         return self._advance_tick_after_bots(
             melee_intents,
             manager_action=None,
@@ -284,10 +279,10 @@ class GameEnv(gym.Env):
         """Run one tick: all bots act, then both managers' village actions are applied.
 
         Matches the order used in self-play village training. Use ``bot_policy=None``
-        (or pass a loaded PPO) for low-level control; ``None`` yields random bot moves.
+        for random bot moves, or pass a policy with ``predict(obs)`` for scripted bots.
 
         Args:
-            bot_policy: Frozen PPO for bots, or ``None`` for random discrete actions.
+            bot_policy: Optional policy for non-human bots, or ``None`` for random actions.
             red_village_action: Flattened village action index for team 0.
             blue_village_action: Flattened village action index for team 1.
             human_team: If set with ``human_bot_actions``, that team's alive bots use
@@ -380,44 +375,6 @@ class GameEnv(gym.Env):
             "team": self.team,
             "mode": self.mode,
         }
-
-    def _bot_checkpoint_path(self) -> Path | None:
-        from omegaconf import OmegaConf
-
-        cfg: dict[str, Any] = (
-            OmegaConf.to_container(self.config, resolve=True)  # type: ignore[assignment]
-            if OmegaConf.is_config(self.config)
-            else dict(self.config)
-        )
-        game = cfg.get("game")
-        if isinstance(game, dict):
-            p = game.get("bot_rl_checkpoint")
-            if p:
-                path = Path(str(p))
-                return path if path.suffix else path.with_suffix(".zip")
-        training = cfg.get("training")
-        if isinstance(training, dict) and training.get("bot_checkpoint"):
-            path = Path(str(training["bot_checkpoint"]))
-            return path if path.suffix else path.with_suffix(".zip")
-        return None
-
-    def _ensure_bot_policy_loaded(self) -> None:
-        if self._bot_policy_load_attempted:
-            return
-        self._bot_policy_load_attempted = True
-        path = self._bot_checkpoint_path()
-        if path is None:
-            return
-        if not path.is_file():
-            logger.warning("Bot RL checkpoint not found at {}, using random bot actions", path)
-            return
-        try:
-            from stable_baselines3 import PPO
-
-            self._loaded_bot_policy = PPO.load(str(path))
-            logger.info("Loaded bot policy from {}", path)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Failed to load bot policy from {}: {}", path, e)
 
     def _get_single_bot_obs(self, bot_id: int, team: int | None = None) -> np.ndarray:
         assert self._state is not None

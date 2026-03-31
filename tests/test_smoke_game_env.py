@@ -7,6 +7,7 @@ import pytest
 
 pytest.importorskip("gymnasium")
 
+from village_ai_war.agents.bot_obs_builder import BotObsBuilder
 from village_ai_war.env.game_env import GameEnv
 
 
@@ -107,9 +108,10 @@ def test_village_reset_step() -> None:
 def test_bot_reset_step() -> None:
     env = GameEnv(_tiny_config(), mode="bot", team=0, render_mode=None)
     obs, _ = env.reset(seed=2)
-    assert obs.shape == (181,)
+    d = BotObsBuilder.OBS_DIM
+    assert obs.shape == (d,)
     obs2, r, term, trunc, _ = env.step(0)
-    assert len(obs2) == 181
+    assert len(obs2) == d
 
 
 def test_step_with_opponent_and_action_masks_team() -> None:
@@ -118,7 +120,7 @@ def test_step_with_opponent_and_action_masks_team() -> None:
     env = GameEnv(cfg, mode="bot", team=0, render_mode=None)
     env.reset(seed=0)
     obs, r, term, trunc, info = env.step_with_opponent(0, 0)
-    assert obs.shape == (181,)
+    assert obs.shape == (BotObsBuilder.OBS_DIM,)
     assert "kills_this_tick" in info
     assert "winner" in info
 

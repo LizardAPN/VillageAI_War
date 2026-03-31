@@ -1,4 +1,4 @@
-"""Build normalized low-level bot observations (fixed length 181)."""
+"""Build normalized per-bot observation vectors (MAPPO local slots, ``GameEnv`` bot mode)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from village_ai_war.state import GameState, GlobalRewardMode, ResourceLayer, Rol
 class BotObsBuilder:
     """Observation layout for a single controllable bot.
 
-    Layout (``181`` floats in ``[0, 1]``):
+    Vector length is ``OBS_DIM`` (all values in ``[0, 1]``):
 
     - ``0:49`` — 7×7 local terrain patch (centered on bot), values are
       ``TerrainType / max_terrain``.
@@ -25,7 +25,7 @@ class BotObsBuilder:
     - ``110:114`` — ally alive count / ``pop_cap``, enemy alive / ``pop_cap``,
       ally TH HP fraction, enemy TH HP fraction (4 scalars).
     - ``114:116`` — role-specific hints (dist / map_size, secondary norm).
-    - ``116:181`` — reserved (zeros).
+    - ``116:OBS_DIM`` — reserved (zeros).
 
     Args:
         map_size: Side length of the square map.
@@ -33,8 +33,10 @@ class BotObsBuilder:
         config: Optional merged game config (for ``map.resource_capacity``).
     """
 
-    OBS_DIM = 181
     PATCH = 7
+    _CORE_END = 116
+    _RESERVED_TAIL = 65
+    OBS_DIM = _CORE_END + _RESERVED_TAIL
 
     def __init__(
         self,

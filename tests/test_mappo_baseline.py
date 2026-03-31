@@ -195,8 +195,7 @@ def test_mappo_layout_and_critic_shapes() -> None:
 def test_mappo_bot_env_and_policy(tmp_path: Path) -> None:
     cfg = _tiny()
     k = int(cfg["game"]["max_bots_for_role_change"])
-    pool = tmp_path / "bot_pool"
-    env = MAPPOBotEnv(cfg, team=0, opponent_pool_dir=str(pool))
+    env = MAPPOBotEnv(cfg, team=0)
     obs, info = env.reset(seed=0)
     assert obs.shape == (mappo_obs_dim(12, k),)
     assert env.action_space.shape == (k,)
@@ -208,9 +207,7 @@ def test_mappo_bot_env_and_policy(tmp_path: Path) -> None:
     assert "global_state" in info2
     env.close()
 
-    pool2 = tmp_path / "bot_pool2"
-    pool2.mkdir()
-    venv = DummyVecEnv([lambda: MAPPOBotEnv(_tiny(), opponent_pool_dir=str(pool2))])
+    venv = DummyVecEnv([lambda: MAPPOBotEnv(_tiny())])
     model = PPO(
         MAPPOPolicy,
         venv,
@@ -228,8 +225,7 @@ def test_mappo_bot_env_and_policy(tmp_path: Path) -> None:
 def test_mappo_obs_helpers_match_mapppo_env(tmp_path: Path) -> None:
     cfg = _tiny()
     k = int(cfg["game"]["max_bots_for_role_change"])
-    pool = tmp_path / "pool_mappo_obs"
-    env = MAPPOBotEnv(cfg, team=0, opponent_pool_dir=str(pool))
+    env = MAPPOBotEnv(cfg, team=0)
     obs, _info = env.reset(seed=42)
     st = env.inner.game_state
     assert st is not None
@@ -243,9 +239,7 @@ def test_mappo_obs_helpers_match_mapppo_env(tmp_path: Path) -> None:
 def test_play_mappo_human_tick_smoke(tmp_path: Path) -> None:
     cfg = _tiny()
     k = int(cfg["game"]["max_bots_for_role_change"])
-    pool = tmp_path / "pool"
-    pool.mkdir()
-    venv = DummyVecEnv([lambda: MAPPOBotEnv(cfg, opponent_pool_dir=str(pool))])
+    venv = DummyVecEnv([lambda: MAPPOBotEnv(cfg)])
     model = PPO(
         MAPPOPolicy,
         venv,

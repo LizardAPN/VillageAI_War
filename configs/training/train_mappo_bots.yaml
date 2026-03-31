@@ -18,8 +18,7 @@ training:
   critic_hidden_dim: 256
   pool_max_size: 15
   checkpoint_interval: 100000
-  opponent_sampling: uniform
-  # K = game.max_bots_for_role_change (stacked locals + global). MAPPO iter*.zip go to mappo_pool_subdir; pool_dir/bots/ is 181-dim opponents only.
+  # K = game.max_bots_for_role_change (stacked locals + global). MAPPO iter*.zip go to mappo_pool_subdir.
   mappo_pool_subdir: bots_mappo
   # TensorBoard rolling window for mappo/outcome_frac/* and mappo/terminal_reason_frac/*
   mappo_metrics_window: 512

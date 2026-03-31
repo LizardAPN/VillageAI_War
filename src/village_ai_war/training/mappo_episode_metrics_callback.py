@@ -40,3 +40,10 @@ class MAPPOEpisodeMetricsCallback(BaseCallback):
                 for k, v in Counter(self._reasons).items():
                     self.logger.record(f"mappo/terminal_reason_frac/{k}", float(v) / float(rn))
         return True
+
+    def outcome_fractions(self) -> dict[str, float]:
+        """Normalized outcome counts in the current rolling window (empty if no episodes yet)."""
+        if not self._outcomes:
+            return {}
+        n = len(self._outcomes)
+        return {str(k): float(v) / float(n) for k, v in Counter(self._outcomes).items()}

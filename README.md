@@ -59,26 +59,11 @@ tensorboard --logdir logs/
 
 ---
 
-## Checkpoints (where things go)
-
-| Path | What it is |
-|------|------------|
-| `checkpoints/bots_mappo/mappo_bot_final.zip` | Your trained MAPPO policy |
-| `checkpoints/pool/bots_mappo/*.zip` | Snapshots during training (not used as opponents) |
-| `checkpoints/pool/bots/*.zip` | *Optional* opponent bots (181-dim PPO, same obs as `GameEnv` bot mode). Empty pool → random opponents. |
-
----
-
-## Optional: stress-test the env
-
 ```bash
 python scripts/evaluate.py
 ```
 
 Runs many episodes with random village actions and prints rough stats.
 
----
 
-## Code map (if you want to dig in)
 
-Core pieces: [`GameEnv`](src/village_ai_war/env/game_env.py), [`MAPPOBotEnv`](src/village_ai_war/training/mappo_env.py), [`train_mappo_bots.py`](src/village_ai_war/training/train_mappo_bots.py), MAPPO models under [`src/village_ai_war/models/mappo_*.py`](src/village_ai_war/models/).
