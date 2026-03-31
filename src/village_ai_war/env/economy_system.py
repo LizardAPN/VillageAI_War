@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 
@@ -35,9 +36,6 @@ class EconomySystem:
         harvest_amount = int(ecfg["harvest_amount"])
         food_per_bot = float(ecfg["food_consumption"])
         hunger_damage = int(ecfg["hunger_damage"])
-        spawn_delay = int(ecfg["bot_spawn_delay"])
-        bot_cost_wood = int(ecfg["bot_cost"]["wood"])
-        bot_cost_food = int(ecfg["bot_cost"]["food"])
         farm_bonus = float(ecfg.get("farm_food_bonus", 0.5))
 
         resource_by_bot: dict[int, int] = {}
@@ -111,7 +109,6 @@ class EconomySystem:
                 village.resources.food -= need
                 events["food_delta"][team] -= need
             else:
-                short = need - village.resources.food
                 village.resources.food = 0
                 events["food_delta"][team] -= need
                 for _b in alive:

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 
-from village_ai_war.state import GameState, GlobalRewardMode, ResourceLayer, Role, TerrainType
+from village_ai_war.state import GameState, ResourceLayer, Role, TerrainType
 
 
 class BotObsBuilder:

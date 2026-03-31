@@ -3,7 +3,15 @@
 from typing import Any
 
 from village_ai_war.env.combat_system import CombatSystem
-from village_ai_war.state import BotState, BuildingState, BuildingType, GameState, ResourceStock, Role, VillageState
+from village_ai_war.state import (
+    BotState,
+    BuildingState,
+    BuildingType,
+    GameState,
+    ResourceStock,
+    Role,
+    VillageState,
+)
 
 
 def _ccfg() -> dict[str, Any]:

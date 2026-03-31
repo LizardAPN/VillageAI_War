@@ -8,7 +8,6 @@ from typing import Any, SupportsFloat, cast
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
-from loguru import logger
 
 from village_ai_war.agents.action_masker import ActionMasker
 from village_ai_war.agents.bot_obs_builder import BotObsBuilder

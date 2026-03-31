@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, SupportsFloat
+from collections.abc import Mapping
+from typing import Any, SupportsFloat
 
 import numpy as np
 

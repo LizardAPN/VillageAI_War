@@ -5,7 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from village_ai_war.env.building_system import BuildingSystem
-from village_ai_war.state import BotState, BuildingType, GameState, ResourceStock, Role, VillageState
+from village_ai_war.state import (
+    BotState,
+    BuildingType,
+    GameState,
+    ResourceStock,
+    Role,
+    VillageState,
+)
 
 
 def _bcfg() -> dict[str, Any]:

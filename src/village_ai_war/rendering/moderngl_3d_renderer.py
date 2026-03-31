@@ -7,19 +7,26 @@ from typing import Any
 
 import numpy as np
 
-from village_ai_war.rendering.building_models_3d import add_building_variant as _add_building_variant
-from village_ai_war.rendering.world_scenery_3d import (
-    add_resource_prop as _add_resource_prop,
-    add_terrain_cell as _add_terrain_cell,
-    terrain_height as _terrain_height,
+from village_ai_war.rendering.building_models_3d import (
+    add_building_variant as _add_building_variant,
 )
 from village_ai_war.rendering.mesh_primitives import (
     add_cuboid as _add_cuboid,
+)
+from village_ai_war.rendering.mesh_primitives import (
     add_cylinder_y as _add_cylinder_y,
-    add_pyramid as _add_pyramid,
-    add_quad as _add_quad,
+)
+from village_ai_war.rendering.mesh_primitives import (
     add_sphere as _add_sphere,
-    add_tri as _add_tri,
+)
+from village_ai_war.rendering.world_scenery_3d import (
+    add_resource_prop as _add_resource_prop,
+)
+from village_ai_war.rendering.world_scenery_3d import (
+    add_terrain_cell as _add_terrain_cell,
+)
+from village_ai_war.rendering.world_scenery_3d import (
+    terrain_height as _terrain_height,
 )
 from village_ai_war.state import (
     GameState,

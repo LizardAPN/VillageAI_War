@@ -9,4 +9,6 @@ wandb/
 outputs/
 .hydra/
 *.egg-info
+dist/
+build/
 .cursor/

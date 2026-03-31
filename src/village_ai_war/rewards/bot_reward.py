@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from village_ai_war.rewards.global_reward import mode_coefficient
 from village_ai_war.state import BotState, GlobalRewardMode
