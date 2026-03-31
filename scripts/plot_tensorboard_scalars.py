@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot TensorBoard scalar runs (e.g. unified_bots / unified_village) to PNG grids."""
+"""Plot TensorBoard scalar runs (default: MAPPO logs/mappo_bots) to PNG grids."""
 
 from __future__ import annotations
 

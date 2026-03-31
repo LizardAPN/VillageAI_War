@@ -1,9 +1,10 @@
-"""Plot TensorBoard scalar runs as PNG grids (unified training and similar)."""
+"""Plot TensorBoard scalar runs as PNG grids (e.g. MAPPO training)."""
 
 from __future__ import annotations
 
 import math
 from pathlib import Path
+
 from loguru import logger
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
@@ -80,62 +81,86 @@ def plot_scalar_groups(
     return written
 
 
-def plot_unified_tensorboard_runs(
+def plot_tensorboard_subdir(
+    log_root: Path,
+    subdir: str,
+    output_path: Path | None = None,
+) -> list[Path]:
+    """Plot the latest SB3 run under ``log_root/subdir`` into a PNG grid."""
+    if output_path is None:
+        output_path = log_root / "plots" / f"{subdir}_scalars.png"
+    run_dir = latest_run_dir(log_root, subdir)
+    if run_dir is None:
+        logger.warning("No TensorBoard run directory under {}", log_root / subdir)
+        return []
+    series = load_scalar_series(run_dir)
+    if not series:
+        return []
+    written = plot_scalar_groups(series, f"TensorBoard scalars ({subdir})", output_path)
+    logger.info("Wrote metric plots to {}", output_path.parent)
+    return written
+
+
+def plot_training_tensorboard_runs(
     log_root: Path,
     *,
-    bots_subdir: str = "unified_bots",
-    village_subdir: str = "unified_village",
-    output_bots: Path | None = None,
-    output_village: Path | None = None,
+    primary_subdir: str = "mappo_bots",
+    primary_output: Path | None = None,
+    secondary_subdir: str | None = None,
+    secondary_output: Path | None = None,
 ) -> list[Path]:
-    """Load latest SB3 runs under ``log_root`` and write PNG grids."""
+    """Plot one or two TensorBoard run folders (e.g. MAPPO plus an optional legacy folder)."""
     written: list[Path] = []
-    if output_bots is None:
-        output_bots = log_root / "plots" / "unified_bots_scalars.png"
-    if output_village is None:
-        output_village = log_root / "plots" / "unified_village_scalars.png"
-
-    bot_dir = latest_run_dir(log_root, bots_subdir)
-    if bot_dir is not None:
-        s = load_scalar_series(bot_dir)
-        if s:
-            written.extend(
-                plot_scalar_groups(s, f"TensorBoard scalars ({bots_subdir})", output_bots)
+    written.extend(plot_tensorboard_subdir(log_root, primary_subdir, primary_output))
+    if secondary_subdir:
+        written.extend(
+            plot_tensorboard_subdir(
+                log_root,
+                secondary_subdir,
+                secondary_output,
             )
-            logger.info("Wrote bot phase metric plots to {}", output_bots.parent)
-    else:
-        logger.warning("No TensorBoard run directory under {}", log_root / bots_subdir)
-
-    vil_dir = latest_run_dir(log_root, village_subdir)
-    if vil_dir is not None:
-        s = load_scalar_series(vil_dir)
-        if s:
-            written.extend(
-                plot_scalar_groups(s, f"TensorBoard scalars ({village_subdir})", output_village)
-            )
-            logger.info("Wrote village phase metric plots to {}", output_village.parent)
-    else:
-        logger.warning("No TensorBoard run directory under {}", log_root / village_subdir)
-
+        )
     return written
 
 
 def main_cli(argv: list[str] | None = None) -> None:
     import argparse
 
-    p = argparse.ArgumentParser(description="Plot TensorBoard scalars from unified training runs.")
-    p.add_argument("--log-root", type=Path, default=Path("logs"), help="Root containing unified_bots / unified_village")
-    p.add_argument("--bots-subdir", default="unified_bots")
-    p.add_argument("--village-subdir", default="unified_village")
-    p.add_argument("--output-bots", type=Path, default=None)
-    p.add_argument("--output-village", type=Path, default=None)
+    p = argparse.ArgumentParser(
+        description="Plot TensorBoard scalars (default: MAPPO logs/mappo_bots/).",
+    )
+    p.add_argument(
+        "--log-root",
+        type=Path,
+        default=Path("logs"),
+        help="Root directory that contains the TensorBoard subfolder (e.g. mappo_bots)",
+    )
+    p.add_argument(
+        "--subdir",
+        default="mappo_bots",
+        help="Subfolder under log-root with SB3 run dirs",
+    )
+    p.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output PNG path (default: log-root/plots/<subdir>_scalars.png)",
+    )
+    p.add_argument(
+        "--second-subdir",
+        default="",
+        help="Optional second subfolder to plot (e.g. old unified_bots)",
+    )
+    p.add_argument("--second-output", type=Path, default=None, help="Output path for second plot")
     args = p.parse_args(argv)
-    plot_unified_tensorboard_runs(
-        args.log_root.resolve(),
-        bots_subdir=args.bots_subdir,
-        village_subdir=args.village_subdir,
-        output_bots=args.output_bots,
-        output_village=args.output_village,
+    root = args.log_root.resolve()
+    sec = args.second_subdir.strip() or None
+    plot_training_tensorboard_runs(
+        root,
+        primary_subdir=args.subdir,
+        primary_output=args.output,
+        secondary_subdir=sec,
+        secondary_output=args.second_output,
     )
 
 

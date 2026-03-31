@@ -1,4 +1,4 @@
-"""Stage 4 (MAPPO): decentralized actor + centralized critic, bot self-play pool."""
+"""MAPPO bot training: decentralized actor + centralized critic, bot self-play pool."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
 
 from village_ai_war.models.mappo_policy import MAPPOPolicy
-from village_ai_war.training.mappo_episode_metrics_callback import MAPPOEpisodeMetricsCallback
 from village_ai_war.training.mappo_env import MAPPOBotEnv
+from village_ai_war.training.mappo_episode_metrics_callback import MAPPOEpisodeMetricsCallback
 from village_ai_war.training.pool_manager import PoolManager
 
 
@@ -41,7 +41,7 @@ def run_mappo_bots_training(cfg: Any) -> None:
     flat = _flat_cfg(cfg)
     tcfg = flat["training"]
     pool_root = Path(tcfg["pool_dir"])
-    # Opponents must be 181-dim (stage 1 / unified bot); MAPPO zips go elsewhere.
+    # Opponents must be 181-dim bot PPO zips in pool/bots/; MAPPO zips go elsewhere.
     opponent_pool_dir = pool_root / "bots"
     opponent_pool_dir.mkdir(parents=True, exist_ok=True)
     mappo_pool_dir = pool_root / str(tcfg.get("mappo_pool_subdir", "bots_mappo"))

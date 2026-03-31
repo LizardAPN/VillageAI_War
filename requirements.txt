@@ -1,7 +1,6 @@
 gymnasium>=0.29
 stable-baselines3>=2.0
 tensorboard>=2.14
-sb3-contrib>=2.0
 torch>=2.0
 pygame>=2.5
 moderngl>=5.10

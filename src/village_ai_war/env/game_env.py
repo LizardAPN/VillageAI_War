@@ -131,7 +131,7 @@ class GameEnv(gym.Env):
         self._prev_distances.clear()
         self._tick_start_positions.clear()
 
-        # Pick controlled bot for bot mode (optional role filter for stage-1 training)
+        # Pick controlled bot for bot mode (optional role filter)
         if self.mode == "bot":
             vb = self._state.villages[self.team].bots
             role_filter: int | None = int(self.bot_role) if self.bot_role is not None else None
