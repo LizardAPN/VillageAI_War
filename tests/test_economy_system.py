@@ -86,6 +86,35 @@ def test_gatherer_collects_wood() -> None:
     ev = EconomySystem.step(g, cfg)
     assert g.villages[0].resources.wood > 0
     assert ev["wood_delta"][0] > 0
+    assert ev["resource_collected_by_bot"].get(0, 0) > 0
+
+
+def test_fractional_food_consumption_ceil() -> None:
+    """0.5 per bot × 3 alive → ceil(1.5) = 2 food deducted when affordable."""
+    cfg = _minimal_config()
+    cfg["economy"]["food_consumption"] = 0.5
+    g = GameState(
+        map_size=8,
+        max_ticks=100,
+        terrain=[[0] * 8 for _ in range(8)],
+        resources=[[0] * 8 for _ in range(8)],
+        resource_amounts=[[0] * 8 for _ in range(8)],
+        villages=[
+            VillageState(
+                team=0,
+                resources=ResourceStock(food=10),
+                bots=[
+                    BotState(bot_id=0, team=0, role=Role.WARRIOR, position=(0, 0)),
+                    BotState(bot_id=1, team=0, role=Role.WARRIOR, position=(1, 0)),
+                    BotState(bot_id=2, team=0, role=Role.WARRIOR, position=(2, 0)),
+                ],
+            ),
+            VillageState(team=1),
+        ],
+        next_bot_id=3,
+    )
+    EconomySystem.step(g, cfg)
+    assert g.villages[0].resources.food == 8
 
 
 def test_hunger_when_no_food() -> None:

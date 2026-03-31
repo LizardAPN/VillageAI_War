@@ -1,6 +1,6 @@
 """Full world state: map, villages, blueprints, termination."""
 
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -28,7 +28,7 @@ class GameState(BaseModel):
     blueprints: list[dict[str, Any]] = Field(default_factory=list)
     villages: list[VillageState] = Field(default_factory=list)
     is_done: bool = False
-    winner: Optional[int] = Field(
+    winner: int | None = Field(
         default=None,
         description="0=red, 1=blue, None=ongoing or draw.",
     )

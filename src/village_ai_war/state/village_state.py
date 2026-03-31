@@ -1,7 +1,6 @@
 """Village-level aggregates: resources, buildings, manager state."""
 
 from enum import IntEnum
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -66,13 +65,13 @@ class VillageState(BaseModel):
     resources: ResourceStock = Field(default_factory=ResourceStock)
     pop_cap: int = 10
     global_reward_mode: GlobalRewardMode = GlobalRewardMode.NEUTRAL
-    rally_point: Optional[tuple[int, int]] = None
+    rally_point: tuple[int, int] | None = None
     bots: list[BotState] = Field(default_factory=list)
     buildings: list[BuildingState] = Field(default_factory=list)
     total_kills: int = 0
     total_losses: int = 0
     ticks_without_progress: int = 0
     spawn_queue_ticks_remaining: int = 0
-    pending_recruit_role: Optional[int] = None
+    pending_recruit_role: int | None = None
 
     model_config = {"frozen": False}

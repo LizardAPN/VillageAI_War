@@ -1,0 +1,33 @@
+# @package _global_
+# MAPPO: decentralized actor + centralized critic on global obs.
+# Use: python scripts/run_training.py
+training:
+  algorithm: mappo
+  total_timesteps: 3000000
+  selfplay_iterations: 30
+  n_envs: 8
+  n_steps: 512
+  learning_rate: 3.0e-3
+  batch_size: 256
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  critic_hidden_dim: 256
+  pool_max_size: 15
+  checkpoint_interval: 100000
+  # K = game.max_bots_for_role_change (stacked locals + global). MAPPO iter*.zip go to mappo_pool_subdir.
+  mappo_pool_subdir: bots_mappo
+  # TensorBoard rolling window for mappo/outcome_frac/* and mappo/terminal_reason_frac/*
+  mappo_metrics_window: 512
+  pool_dir: checkpoints/pool
+  checkpoint_dir: checkpoints
+  log_dir: logs
+
+game:
+  initial_bots: 8
+
+logging:
+  use_tensorboard: true

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from village_ai_war.state import VillageState
 
@@ -28,6 +29,12 @@ class VillageRewardCalculator:
             + village_state.resources.food
         ) / 1000.0
         r += eco
+
+        food = int(village_state.resources.food)
+        fthresh = int(rcfg.get("food_security_threshold", 100))
+        fbonus = float(rcfg.get("food_security_bonus", 0.0))
+        if food > fthresh and fbonus != 0.0:
+            r += float(food - fthresh) * fbonus
 
         if "kills" in events and isinstance(events["kills"], dict):
             r += float(rcfg["kill_reward"]) * float(events["kills"].get(team, 0))

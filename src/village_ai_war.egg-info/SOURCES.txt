@@ -22,6 +22,7 @@ src/village_ai_war/env/map_generator.py
 src/village_ai_war/models/__init__.py
 src/village_ai_war/models/role_conditioned_policy.py
 src/village_ai_war/rendering/__init__.py
+src/village_ai_war/rendering/moderngl_3d_renderer.py
 src/village_ai_war/rendering/pygame_renderer.py
 src/village_ai_war/rewards/__init__.py
 src/village_ai_war/rewards/bot_reward.py
@@ -34,10 +35,13 @@ src/village_ai_war/state/game_state.py
 src/village_ai_war/state/village_state.py
 src/village_ai_war/training/__init__.py
 src/village_ai_war/training/pool_manager.py
+src/village_ai_war/training/progress_callback.py
 src/village_ai_war/training/self_play_env.py
+src/village_ai_war/training/tensorboard_plots.py
 src/village_ai_war/training/train_bots.py
 src/village_ai_war/training/train_bots_selfplay.py
 src/village_ai_war/training/train_joint.py
+src/village_ai_war/training/train_unified.py
 src/village_ai_war/training/train_village.py
 src/village_ai_war/training/train_village_selfplay.py
 tests/test_action_masker.py
@@ -45,7 +49,9 @@ tests/test_combat_system.py
 tests/test_economy_system.py
 tests/test_game_state.py
 tests/test_pool_manager.py
+tests/test_render_import.py
 tests/test_reward_bot.py
 tests/test_reward_village.py
 tests/test_role_conditioned_policy.py
 tests/test_smoke_game_env.py
+tests/test_unified_training_smoke.py

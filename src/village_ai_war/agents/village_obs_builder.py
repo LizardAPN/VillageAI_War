@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 
 from village_ai_war.state import BuildingType, GameState, TerrainType
@@ -39,8 +37,8 @@ class VillageObsBuilder:
     def __init__(self, map_size: int) -> None:
         self.map_size = map_size
 
-    def build(self, state: GameState, team: int) -> dict[str, np.ndarray]:
-        """Return dict with ``"map"`` and ``"village"`` arrays."""
+    def build_map(self, state: GameState, team: int) -> np.ndarray:
+        """Map tensor ``(N, N, C)`` in ``[0, 1]``; ally/enemy are relative to ``team``."""
         n = state.map_size
         terr = np.asarray(state.terrain, dtype=np.float32) / float(max(TerrainType))
         res = np.asarray(state.resources, dtype=np.float32) / 4.0
@@ -76,6 +74,14 @@ class VillageObsBuilder:
         en_u = np.clip(en_u / pop_cap, 0.0, 1.0)
 
         mp = np.stack([terr, res, ally_b, en_b, ally_u, en_u], axis=-1)
+        return mp.astype(np.float32)
+
+    def build_village_vec(self, state: GameState, team: int) -> np.ndarray:
+        """Village state vector (``VEC_DIM``,) in ``[0, 1]`` for ``team``."""
+        n = state.map_size
+        village = state.villages[team]
+        enemy = state.villages[1 - team]
+        pop_cap = max(village.pop_cap, 1)
 
         vec = np.zeros((self.VEC_DIM,), dtype=np.float32)
         vec[0] = float(np.clip(village.resources.wood / 500.0, 0.0, 1.0))
@@ -98,4 +104,11 @@ class VillageObsBuilder:
             vec[16] = 1.0 - float(village.spawn_queue_ticks_remaining) / 10.0
             vec[16] = float(np.clip(vec[16], 0.0, 1.0))
 
-        return {"map": mp.astype(np.float32), "village": vec}
+        return vec
+
+    def build(self, state: GameState, team: int) -> dict[str, np.ndarray]:
+        """Return dict with ``"map"`` and ``"village"`` arrays."""
+        return {
+            "map": self.build_map(state, team),
+            "village": self.build_village_vec(state, team),
+        }

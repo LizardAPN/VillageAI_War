@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch training stages via Hydra (``training.stage`` 0 unified, 1–3 legacy)."""
+"""Launch MAPPO bot training via Hydra."""
 
 from __future__ import annotations
 
@@ -14,12 +14,9 @@ if str(_ROOT / "src") not in sys.path:
 import hydra
 from hydra.core.hydra_config import HydraConfig
 from loguru import logger
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
-from village_ai_war.training.train_bots_selfplay import run_bots_selfplay_training
-from village_ai_war.training.train_joint import run_joint_training
-from village_ai_war.training.train_unified import run_unified_training
-from village_ai_war.training.train_village_selfplay import run_village_selfplay_training
+from village_ai_war.training.train_mappo_bots import run_mappo_bots_training
 
 
 class _InterceptHandler(logging.Handler):
@@ -54,22 +51,10 @@ def _configure_run_log_file() -> None:
 
 @hydra.main(version_base=None, config_path=str(_ROOT / "configs"), config_name="default")
 def main(cfg: DictConfig) -> None:
-    """Dispatch to stage trainers."""
+    """Run MAPPO bot self-play training."""
     _configure_run_log_file()
-    flat = OmegaConf.to_container(cfg, resolve=True)
-
-    stage = int(flat["training"]["stage"])
-    logger.info("Starting training stage {}", stage)
-    if stage == 0:
-        run_unified_training(cfg)
-    elif stage == 1:
-        run_bots_selfplay_training(cfg)
-    elif stage == 2:
-        run_village_selfplay_training(cfg)
-    elif stage == 3:
-        run_joint_training(cfg)
-    else:
-        raise ValueError(f"Unknown training.stage={stage}")
+    logger.info("Starting MAPPO bot training")
+    run_mappo_bots_training(cfg)
 
 
 if __name__ == "__main__":

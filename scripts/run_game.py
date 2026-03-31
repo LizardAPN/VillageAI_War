@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Play a match with optional trained village / bot policies (pygame if available)."""
+"""Play: human vs MAPPO (2D), or passive demo with random village manager steps."""
 
 from __future__ import annotations
 
@@ -11,12 +11,13 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 
-import numpy as np  # noqa: E402
-from loguru import logger  # noqa: E402
+import numpy as np
+from loguru import logger
 
-from village_ai_war.config_load import load_project_config  # noqa: E402
-from village_ai_war.env.game_env import GameEnv  # noqa: E402
-from village_ai_war.training.self_play_env import _maskable_village_obs_matches_env  # noqa: E402
+from village_ai_war.config_load import load_project_config
+from village_ai_war.env.game_env import GameEnv
+from village_ai_war.play.human_controls import collect_blue_bot_actions_for_tick
+from village_ai_war.play.mappo_human_tick import play_mappo_human_tick
 
 
 def _resolve_ckpt(path_str: str | None) -> Path | None:
@@ -28,82 +29,29 @@ def _resolve_ckpt(path_str: str | None) -> Path | None:
     return p if p.is_file() else None
 
 
-def main() -> None:
-    warnings.filterwarnings(
-        "ignore",
-        category=UserWarning,
-        module="pygame.pkgdata",
+def _load_mappo_policy(path: Path, _flat: dict) -> object:
+    from stable_baselines3 import PPO
+
+    import village_ai_war.models.mappo_policy  # noqa: F401 — SB3 unpickle
+
+    return PPO.load(
+        str(path),
+        device="auto",
+        custom_objects={
+            "lr_schedule": lambda _: 0.0,
+            "clip_range": lambda _: 0.0,
+        },
     )
-    parser = argparse.ArgumentParser(description="Run Village AI War with optional RL checkpoints.")
-    parser.add_argument(
-        "--village-checkpoint",
-        default="checkpoints/village/village_final.zip",
-        help="MaskablePPO zip for red manager; if missing, random valid actions.",
-    )
-    parser.add_argument(
-        "--opponent-village-checkpoint",
-        default="",
-        help="MaskablePPO zip for blue manager; if empty or missing, random valid actions.",
-    )
-    parser.add_argument(
-        "--bot-checkpoint",
-        default="checkpoints/bots/bot_final.zip",
-        help="PPO zip for low-level bots; if missing, random bot moves.",
-    )
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--max-steps", type=int, default=500)
-    parser.add_argument(
-        "--deterministic",
-        action="store_true",
-        help="Use deterministic policy.predict for loaded MaskablePPO.",
-    )
-    parser.add_argument(
-        "--human-3d",
-        action="store_true",
-        help="OpenGL 3D board (moderngl + pygame); needs pip install moderngl and a working display.",
-    )
-    args = parser.parse_args()
 
-    flat = load_project_config(_ROOT)
-    bot_path = _resolve_ckpt(args.bot_checkpoint)
-    if bot_path is not None:
-        game = dict(flat.get("game", {}))
-        game["bot_rl_checkpoint"] = str(bot_path)
-        flat = {**flat, "game": game}
 
-    village_path = _resolve_ckpt(args.village_checkpoint)
-    opp_path = _resolve_ckpt(args.opponent_village_checkpoint or None)
-
-    red_model = None
-    blue_model = None
-    if village_path is not None:
-        try:
-            from sb3_contrib import MaskablePPO
-
-            red_model = MaskablePPO.load(str(village_path), device="auto")
-            logger.info("Loaded red village policy from {}", village_path)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Could not load red village policy ({}); using random red actions", e)
-    if opp_path is not None:
-        try:
-            from sb3_contrib import MaskablePPO
-
-            blue_model = MaskablePPO.load(str(opp_path), device="auto")
-            logger.info("Loaded blue village policy from {}", opp_path)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Could not load blue village policy ({}); using random blue actions", e)
-
-    bot_policy = None
-    if bot_path is not None:
-        try:
-            from stable_baselines3 import PPO
-
-            bot_policy = PPO.load(str(bot_path), device="auto")
-            logger.info("Loaded bot policy from {}", bot_path)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Could not load bot policy ({}); using random bot moves", e)
-
-    render_mode = "human_3d" if args.human_3d else "human"
+def _run_random_village_demo(
+    flat: dict,
+    *,
+    seed: int,
+    max_steps: int,
+    human_3d: bool,
+) -> None:
+    render_mode = "human_3d" if human_3d else "human"
     try:
         env = GameEnv(flat, mode="village", team=0, render_mode=render_mode)
     except Exception as e:  # noqa: BLE001
@@ -112,30 +60,6 @@ def main() -> None:
             e,
         )
         env = GameEnv(flat, mode="village", team=0, render_mode=None)
-
-    env_obs_space = env.observation_space
-    if red_model is not None and not _maskable_village_obs_matches_env(red_model, env_obs_space):
-        logger.warning(
-            "Red village checkpoint {} does not match game observation space (e.g. map.size); "
-            "policy obs {} != env {} — using random red manager actions",
-            village_path,
-            red_model.observation_space,
-            env_obs_space,
-        )
-        red_model = None
-    if blue_model is not None and not _maskable_village_obs_matches_env(blue_model, env_obs_space):
-        logger.warning(
-            "Blue village checkpoint {} does not match game observation space; "
-            "policy obs {} != env {} — using random blue manager actions",
-            opp_path,
-            blue_model.observation_space,
-            env_obs_space,
-        )
-        blue_model = None
-
-    rng = np.random.default_rng(args.seed)
-    obs, _ = env.reset(seed=args.seed)
-    use_trained_tick = red_model is not None or blue_model is not None or bot_policy is not None
 
     if env.render_mode == "human_3d":
         try:
@@ -158,52 +82,137 @@ def main() -> None:
                 )
                 env.close()
                 env = GameEnv(flat, mode="village", team=0, render_mode="human")
-                obs, _ = env.reset(seed=args.seed)
             else:
                 raise
 
+    rng = np.random.default_rng(seed)
+    _obs, _ = env.reset(seed=seed)
+
     if env.render_mode is not None:
         logger.info(
-            "Viewer render_mode={} | max_steps={} | close the window or Ctrl+C to stop early",
+            "Random village demo | render_mode={} | max_steps={} | close window or Ctrl+C to stop",
             env.render_mode,
-            args.max_steps,
+            max_steps,
         )
 
-    for t in range(args.max_steps):
-        if use_trained_tick:
-            m0 = env.action_masks(team=0)
-            m1 = env.action_masks(team=1)
-            obs0 = env.get_village_observation(0)
-            if red_model is not None:
-                a0, _ = red_model.predict(
-                    obs0,
-                    action_masks=m0,
-                    deterministic=args.deterministic,
-                )
-                a0 = int(np.asarray(a0).reshape(-1)[0])
-            else:
-                a0 = int(rng.choice(np.flatnonzero(m0)))
-            if blue_model is not None:
-                obs1 = env.get_village_observation(1)
-                a1, _ = blue_model.predict(
-                    obs1,
-                    action_masks=m1,
-                    deterministic=args.deterministic,
-                )
-                a1 = int(np.asarray(a1).reshape(-1)[0])
-            else:
-                a1 = int(rng.choice(np.flatnonzero(m1)))
-            obs, r, term, trunc, info = env.run_bots_then_village_decisions(bot_policy, a0, a1)
-        else:
-            m = env.action_masks()
-            a = int(rng.choice(np.flatnonzero(m)))
-            obs, r, term, trunc, info = env.step(a)
+    for t in range(max_steps):
+        m = env.action_masks()
+        a = int(rng.choice(np.flatnonzero(m)))
+        _obs, _r, term, trunc, info = env.step(a)
         if env.render_mode is not None:
             env.render()
         if term or trunc:
             logger.info("Done at t={} info={}", t, info)
             break
     env.close()
+
+
+def main() -> None:
+    warnings.filterwarnings(
+        "ignore",
+        category=UserWarning,
+        module="pygame.pkgdata",
+    )
+    parser = argparse.ArgumentParser(
+        description="Village AI War: human vs MAPPO, or random village-manager demo."
+    )
+    parser.add_argument(
+        "--mappo-opponent",
+        default="",
+        help="Path to MAPPO zip (e.g. checkpoints/bots_mappo/mappo_bot_final.zip). "
+        "Human plays BLUE vs MAPPO on RED; no village AI (training-faithful micro).",
+    )
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--max-steps", type=int, default=500)
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Deterministic policy.predict for MAPPO opponent.",
+    )
+    parser.add_argument(
+        "--human-3d",
+        action="store_true",
+        help="OpenGL 3D board for the random demo only (ignored with --mappo-opponent).",
+    )
+    args = parser.parse_args()
+
+    flat = load_project_config(_ROOT)
+    mappo_path = _resolve_ckpt(args.mappo_opponent or None)
+
+    if str(args.mappo_opponent).strip() and mappo_path is None:
+        logger.error("MAPPO checkpoint not found: {}", args.mappo_opponent)
+        sys.exit(1)
+
+    if mappo_path is not None:
+        if args.human_3d:
+            logger.warning("MAPPO human play uses 2D pygame only; ignoring --human-3d.")
+        render_mode = "human"
+        try:
+            env = GameEnv(flat, mode="bot", team=0, render_mode=render_mode)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Display unavailable ({}); headless MAPPO play", e)
+            env = GameEnv(flat, mode="bot", team=0, render_mode=None)
+
+        try:
+            mappo_model = _load_mappo_policy(mappo_path, flat)
+        except Exception as e:  # noqa: BLE001
+            logger.error("Failed to load MAPPO from {}: {}", mappo_path, e)
+            sys.exit(1)
+        logger.info("Loaded MAPPO policy from {}", mappo_path)
+
+        if env.render_mode is None:
+            logger.error("Human vs MAPPO needs a display (pygame 2D window).")
+            sys.exit(1)
+
+        n_slots = int(flat["game"]["max_bots_for_role_change"])
+        env.reset(seed=args.seed)
+        import pygame  # noqa: PLC0415
+
+        def _render(overlay_lines: tuple[str, ...] | None = None) -> None:
+            if env.render_mode is not None:
+                env.render(overlay_lines=overlay_lines or ())
+
+        def _render_cb(overlay_lines: tuple[str, ...] = ()) -> None:
+            _render(overlay_lines)
+
+        if env.render_mode is not None:
+            logger.info(
+                "Human vs MAPPO | BLUE=you | max_steps={} | ESC/close to quit",
+                args.max_steps,
+            )
+
+        for t in range(args.max_steps):
+            blue_actions = collect_blue_bot_actions_for_tick(
+                env,
+                pygame,
+                render=_render_cb,
+            )
+            _obs, _r, term, trunc, info = play_mappo_human_tick(
+                env,
+                mappo_model,
+                blue_actions,
+                n_bot_slots=n_slots,
+                deterministic=args.deterministic,
+            )
+            if env.render_mode is not None:
+                env.render(
+                    overlay_lines=(
+                        f"tick={info.get('tick', '?')}  t={t}",
+                        "Next: choose BLUE bot actions",
+                    )
+                )
+            if term or trunc:
+                logger.info("Done at t={} info={}", t, info)
+                break
+        env.close()
+        return
+
+    _run_random_village_demo(
+        flat,
+        seed=args.seed,
+        max_steps=args.max_steps,
+        human_3d=args.human_3d,
+    )
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import pytest
 
 pytest.importorskip("gymnasium")
 
+from village_ai_war.agents.bot_obs_builder import BotObsBuilder
 from village_ai_war.env.game_env import GameEnv
 
 
@@ -107,9 +108,10 @@ def test_village_reset_step() -> None:
 def test_bot_reset_step() -> None:
     env = GameEnv(_tiny_config(), mode="bot", team=0, render_mode=None)
     obs, _ = env.reset(seed=2)
-    assert obs.shape == (181,)
+    d = BotObsBuilder.OBS_DIM
+    assert obs.shape == (d,)
     obs2, r, term, trunc, _ = env.step(0)
-    assert len(obs2) == 181
+    assert len(obs2) == d
 
 
 def test_step_with_opponent_and_action_masks_team() -> None:
@@ -118,7 +120,7 @@ def test_step_with_opponent_and_action_masks_team() -> None:
     env = GameEnv(cfg, mode="bot", team=0, render_mode=None)
     env.reset(seed=0)
     obs, r, term, trunc, info = env.step_with_opponent(0, 0)
-    assert obs.shape == (181,)
+    assert obs.shape == (BotObsBuilder.OBS_DIM,)
     assert "kills_this_tick" in info
     assert "winner" in info
 
@@ -147,6 +149,30 @@ def test_mutual_extinction_terminates_episode() -> None:
     assert term is True
     assert trunc is False
     assert info.get("winner") is None
+
+
+def test_run_bots_then_village_human_team_excludes_policy() -> None:
+    env = GameEnv(_tiny_config(), mode="village", team=0, render_mode=None)
+    env.reset(seed=7)
+    st = env.game_state
+    assert st is not None
+    blue_alive = [b for b in st.villages[1].bots if b.is_alive]
+    assert blue_alive
+    human_act = {int(b.bot_id): 0 for b in blue_alive}
+    m0 = env.action_masks(team=0)
+    m1 = env.action_masks(team=1)
+    a0 = int(np.flatnonzero(m0)[0])
+    a1 = int(np.flatnonzero(m1)[0])
+    _obs, _r, _t, _tr, _info = env.run_bots_then_village_decisions(
+        None,
+        a0,
+        a1,
+        human_team=1,
+        human_bot_actions=human_act,
+    )
+    with pytest.raises(ValueError, match="human_bot_actions"):
+        env.run_bots_then_village_decisions(None, a0, a1, human_team=1, human_bot_actions={})
+    env.close()
 
 
 def test_get_village_observation_and_run_bots_then_village() -> None:
