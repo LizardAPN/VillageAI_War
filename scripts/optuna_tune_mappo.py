@@ -25,17 +25,9 @@ def _study_path_slug(study_name: str) -> str:
     return s or "study"
 
 
-def _valid_batch_sizes(buffer: int) -> list[int]:
-    opts = [32, 64, 128, 256, 512, 1024]
-    valid = [b for b in opts if b <= buffer and buffer % b == 0]
-    if valid:
-        return valid
-    for b in range(8, buffer + 1):
-        if buffer % b == 0:
-            return [b]
-    if buffer >= 1:
-        return [1]
-    return []
+# Optuna requires the same categorical choices for a parameter name in every trial
+# (see CategoricalDistribution does not support dynamic value space).
+_BATCH_SIZE_CHOICES = [32, 64, 128, 256, 512, 1024]
 
 
 def main() -> None:
@@ -75,12 +67,13 @@ def main() -> None:
         n_envs = int(args.n_envs)
         n_steps = trial.suggest_categorical("n_steps", [128, 256, 512])
         buffer = n_envs * n_steps
-        valid_bs = _valid_batch_sizes(buffer)
-        if not valid_bs:
-            raise TrialPruned(f"no valid batch_size for buffer={buffer}")
 
         lr = trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True)
-        batch_size = trial.suggest_categorical("batch_size", valid_bs)
+        batch_size = trial.suggest_categorical("batch_size", _BATCH_SIZE_CHOICES)
+        if batch_size > buffer or buffer % batch_size != 0:
+            raise TrialPruned(
+                f"batch_size={batch_size} incompatible with n_envs*n_steps={buffer}"
+            )
         n_epochs = trial.suggest_int("n_epochs", 4, 15)
         ent_coef = trial.suggest_float("ent_coef", 1e-4, 0.1, log=True)
         gamma = trial.suggest_float("gamma", 0.95, 0.999)
