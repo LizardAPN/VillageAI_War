@@ -25,21 +25,24 @@ class MAPPOPolicy(ActorCriticPolicy):
         lr_schedule: Schedule,
         map_size: int,
         critic_hidden_dim: int = 256,
+        n_bot_slots: int = 1,
         *args: Any,
         **kwargs: Any,
     ) -> None:
         self._mappo_map_size = int(map_size)
+        self._n_bot_slots = int(n_bot_slots)
         self._local_dim = mappo_local_dim()
+        self._local_prefix = self._n_bot_slots * self._local_dim
         self._map_flat = mappo_map_flat(self._mappo_map_size)
         self._village_total = mappo_village_total()
         tail = self._map_flat + self._village_total
-        expected = self._local_dim + tail
+        expected = self._local_prefix + tail
         if isinstance(observation_space, spaces.Box):
             od = int(np.prod(observation_space.shape))
             if od != expected:
                 raise ValueError(
                     f"MAPPOPolicy expects observation dim {expected} "
-                    f"(local {self._local_dim} + global {tail}), got {od}"
+                    f"(local {self._local_prefix} + global {tail}), got {od}"
                 )
 
         kwargs.setdefault("features_extractor_class", MAPPOActorExtractor)
@@ -51,6 +54,7 @@ class MAPPOPolicy(ActorCriticPolicy):
                 "role_embed_dim": 16,
                 "n_roles": 4,
                 "local_dim": self._local_dim,
+                "n_bot_slots": self._n_bot_slots,
             },
         )
         super().__init__(observation_space, action_space, lr_schedule, *args, **kwargs)
@@ -64,7 +68,7 @@ class MAPPOPolicy(ActorCriticPolicy):
         self.centralized_critic.to(self.device)
 
     def _global_tensors(self, obs: th.Tensor) -> tuple[th.Tensor, th.Tensor]:
-        rest = obs[:, self._local_dim :]
+        rest = obs[:, self._local_prefix :]
         map_flat = rest[:, : self._map_flat]
         vil = rest[:, self._map_flat :]
         n = self._mappo_map_size

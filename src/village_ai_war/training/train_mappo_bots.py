@@ -9,10 +9,11 @@ from typing import Any
 from loguru import logger
 from omegaconf import OmegaConf
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
 
 from village_ai_war.models.mappo_policy import MAPPOPolicy
+from village_ai_war.training.mappo_episode_metrics_callback import MAPPOEpisodeMetricsCallback
 from village_ai_war.training.mappo_env import MAPPOBotEnv
 from village_ai_war.training.pool_manager import PoolManager
 
@@ -50,6 +51,7 @@ def run_mappo_bots_training(cfg: Any) -> None:
     pool_manager = PoolManager(mappo_pool_dir, max_size=int(tcfg.get("pool_max_size", 15)))
 
     n = int(flat["map"]["size"])
+    n_bot_slots = int(flat["game"]["max_bots_for_role_change"])
 
     n_envs = int(tcfg["n_envs"])
     total = int(tcfg["total_timesteps"])
@@ -101,10 +103,13 @@ def run_mappo_bots_training(cfg: Any) -> None:
         policy_kwargs={
             "map_size": n,
             "critic_hidden_dim": critic_h,
+            "n_bot_slots": n_bot_slots,
         },
     )
 
     save_freq = max(int(tcfg.get("checkpoint_interval", 100_000)) // max(n_envs, 1), 1)
+    metrics_window = int(tcfg.get("mappo_metrics_window", 512))
+    metrics_cb = MAPPOEpisodeMetricsCallback(window=metrics_window)
 
     for iteration in range(iterations):
         logger.info("MAPPO self-play iteration {} / {}", iteration + 1, iterations)
@@ -113,9 +118,10 @@ def run_mappo_bots_training(cfg: Any) -> None:
             save_path=str(checkpoint_dir),
             name_prefix=f"mappo_bot_iter{iteration}",
         )
+        learn_cb = CallbackList([checkpoint_callback, metrics_cb])
         model.learn(
             total_timesteps=steps_per_iter,
-            callback=checkpoint_callback,
+            callback=learn_cb,
             reset_num_timesteps=(iteration == 0),
             tb_log_name="mappo_bot_selfplay",
         )

@@ -18,7 +18,7 @@ _BACKBONE_DIM = _ROLE_START + (BotObsBuilder.OBS_DIM - _ROLE_END)
 
 
 class MAPPOActorExtractor(BaseFeaturesExtractor):
-    """Role-conditioned trunk on the first ``local_dim`` components of the observation vector."""
+    """Role-conditioned trunk on the first ``K * local_dim`` components (K bot slots)."""
 
     def __init__(
         self,
@@ -28,13 +28,20 @@ class MAPPOActorExtractor(BaseFeaturesExtractor):
         role_embed_dim: int = 16,
         n_roles: int = 4,
         local_dim: int | None = None,
+        n_bot_slots: int = 1,
     ) -> None:
         obs_dim = int(np.prod(observation_space.shape))
         ld = int(local_dim) if local_dim is not None else mappo_local_dim()
-        if obs_dim < ld:
-            raise ValueError(f"Expected observation dim >= {ld}, got {obs_dim}")
-        super().__init__(observation_space, features_dim)
+        k = int(n_bot_slots)
+        if k < 1:
+            raise ValueError("n_bot_slots must be >= 1")
+        if obs_dim < k * ld:
+            raise ValueError(f"Expected observation dim >= {k * ld}, got {obs_dim}")
+        per_bot = int(features_dim)
+        super().__init__(observation_space, k * per_bot)
         self._local_dim = ld
+        self._n_bot_slots = k
+        self._per_bot_features = per_bot
 
         self.backbone = nn.Sequential(
             nn.Linear(_BACKBONE_DIM, backbone_hidden),
@@ -46,12 +53,16 @@ class MAPPOActorExtractor(BaseFeaturesExtractor):
         )
         self.role_embedding = nn.Embedding(n_roles, role_embed_dim)
         self.head = nn.Sequential(
-            nn.Linear(backbone_hidden + role_embed_dim, features_dim),
+            nn.Linear(backbone_hidden + role_embed_dim, per_bot),
             nn.ReLU(),
         )
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
-        local = observations[:, : self._local_dim]
+        k = self._n_bot_slots
+        ld = self._local_dim
+        bsz = observations.shape[0]
+        bk = bsz * k
+        local = observations[:, : k * ld].reshape(bk, ld)
         role_oh = local[:, _ROLE_START:_ROLE_END]
         role_ids = role_oh.argmax(dim=1).clamp(0, self.role_embedding.num_embeddings - 1)
         rest_before = local[:, :_ROLE_START]
@@ -59,4 +70,5 @@ class MAPPOActorExtractor(BaseFeaturesExtractor):
         obs_no_role = torch.cat([rest_before, rest_after], dim=1)
         hidden = self.backbone(obs_no_role)
         role_vec = self.role_embedding(role_ids)
-        return self.head(torch.cat([hidden, role_vec], dim=1))
+        feat = self.head(torch.cat([hidden, role_vec], dim=1))
+        return feat.reshape(bsz, k * self._per_bot_features)

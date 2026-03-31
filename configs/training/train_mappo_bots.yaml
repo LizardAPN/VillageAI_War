@@ -20,8 +20,10 @@ training:
   pool_max_size: 15
   checkpoint_interval: 100000
   opponent_sampling: uniform
-  # MAPPO iter*.zip are stored here (2621-dim); opponents load from pool_dir/bots/ only (181-dim).
+  # K = game.max_bots_for_role_change (stacked locals + global). MAPPO iter*.zip go to mappo_pool_subdir; pool_dir/bots/ is 181-dim opponents only.
   mappo_pool_subdir: bots_mappo
+  # TensorBoard rolling window for mappo/outcome_frac/* and mappo/terminal_reason_frac/*
+  mappo_metrics_window: 512
   pool_dir: checkpoints/pool
   checkpoint_dir: checkpoints
   log_dir: logs

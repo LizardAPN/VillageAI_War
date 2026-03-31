@@ -20,8 +20,28 @@ def mappo_village_total() -> int:
     return int(VillageObsBuilder.VEC_DIM) * 2
 
 
-def mappo_obs_dim(map_size: int) -> int:
-    return mappo_local_dim() + mappo_map_flat(map_size) + mappo_village_total()
+def mappo_obs_dim(map_size: int, n_bot_slots: int = 1) -> int:
+    return (
+        int(n_bot_slots) * mappo_local_dim()
+        + mappo_map_flat(map_size)
+        + mappo_village_total()
+    )
+
+
+def pack_mappo_obs_slots(
+    locals_k: np.ndarray,
+    map_obs: np.ndarray,
+    village0: np.ndarray,
+    village1: np.ndarray,
+) -> np.ndarray:
+    """Concatenate K local bot rows (K * 181), flattened map (team-0 POV), both village vectors."""
+    flat_map = np.asarray(map_obs, dtype=np.float32).reshape(-1)
+    v = np.concatenate(
+        [np.asarray(village0, dtype=np.float32), np.asarray(village1, dtype=np.float32)],
+        axis=0,
+    )
+    locs = np.asarray(locals_k, dtype=np.float32).reshape(-1)
+    return np.concatenate([locs, flat_map, v], axis=0).astype(np.float32, copy=False)
 
 
 def pack_mappo_obs(
@@ -30,11 +50,10 @@ def pack_mappo_obs(
     village0: np.ndarray,
     village1: np.ndarray,
 ) -> np.ndarray:
-    """Concatenate local bot obs, flattened map (team-0 POV), and both village vectors."""
-    flat_map = np.asarray(map_obs, dtype=np.float32).reshape(-1)
-    v = np.concatenate(
-        [np.asarray(village0, dtype=np.float32), np.asarray(village1, dtype=np.float32)],
-        axis=0,
+    """Single-bot layout: same as ``pack_mappo_obs_slots`` with one local row."""
+    return pack_mappo_obs_slots(
+        np.asarray(local_obs, dtype=np.float32).reshape(1, -1),
+        map_obs,
+        village0,
+        village1,
     )
-    loc = np.asarray(local_obs, dtype=np.float32).reshape(-1)
-    return np.concatenate([loc, flat_map, v], axis=0).astype(np.float32, copy=False)

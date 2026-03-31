@@ -1,7 +1,7 @@
 """
-MAPPO training env: one allied bot per PPO step (round-robin), all opponent bots, then one sim tick.
+MAPPO training env: all allied bots act each tick, all opponent bots, then one sim tick.
 
-Unlike :class:`GameEnv` bot mode, not every allied bot moves on every environment step.
+Observation stacks K local bot vectors (``game.max_bots_for_role_change``) plus global map/village tail.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from stable_baselines3 import PPO
 
 from village_ai_war.agents.village_obs_builder import VillageObsBuilder
 from village_ai_war.env.game_env import GameEnv
-from village_ai_war.models.mappo_layout import mappo_obs_dim, pack_mappo_obs
+from village_ai_war.models.mappo_layout import mappo_obs_dim, pack_mappo_obs_slots
 from village_ai_war.state.game_state import GameState
 
 
@@ -31,7 +31,7 @@ def _as_plain_config(config: Mapping[str, Any] | Any) -> dict[str, Any]:
 
 
 class MAPPOBotEnv(gym.Env):
-    """MAPPO with global state concatenated to each bot observation for the centralized critic."""
+    """MAPPO with K local slots + global state for centralized critic (all allies move per tick)."""
 
     def __init__(
         self,
@@ -50,21 +50,22 @@ class MAPPOBotEnv(gym.Env):
         self.opponent_team = 1 - self.team
 
         self._local_dim = int(self.inner.observation_space.shape[0])  # BotObsBuilder.OBS_DIM
-        self._obs_dim = mappo_obs_dim(n)
+        self._n_bot_slots = int(self._flat_cfg["game"]["max_bots_for_role_change"])
+        self._obs_dim = mappo_obs_dim(n, self._n_bot_slots)
         self.observation_space = spaces.Box(
             low=0.0,
             high=1.0,
             shape=(self._obs_dim,),
             dtype=np.float32,
         )
-        self.action_space = self.inner.action_space
+        self.action_space = spaces.MultiDiscrete(
+            [GameEnv.BOT_ACTIONS] * self._n_bot_slots
+        )
 
         self.opponent_pool_dir = Path(opponent_pool_dir)
         self.opponent_sampling = opponent_sampling
         self._vec_env_index = int(vec_env_index)
         self._opponent_policy: PPO | None = None
-        self._current_bot_idx: int = 0
-        self._alive_bot_ids: list[int] = []
         self._skip_opponent_logged: set[str] = set()
         self._warned_no_compatible_opponent: bool = False
 
@@ -147,25 +148,26 @@ class MAPPOBotEnv(gym.Env):
         v1 = self.village_obs_builder.build_village_vec(state, team=1)
         return {"map": mp, "village": np.concatenate([v0, v1], axis=0).astype(np.float32)}
 
-    def _pack(self, local: np.ndarray, gs: dict[str, np.ndarray]) -> np.ndarray:
-        return pack_mappo_obs(local, gs["map"], gs["village"][:20], gs["village"][20:])
+    def _locals_matrix(self, state: GameState) -> np.ndarray:
+        """K x local_dim; alive bots sorted by bot_id fill low rows, then zeros."""
+        k = self._n_bot_slots
+        d = self._local_dim
+        out = np.zeros((k, d), dtype=np.float32)
+        village = state.villages[self.team]
+        alive = sorted((b for b in village.bots if b.is_alive), key=lambda b: int(b.bot_id))
+        for i, bot in enumerate(alive[:k]):
+            out[i] = self.inner._get_single_bot_obs(bot.bot_id, self.team)
+        return out
+
+    def _pack_slots(self, locals_k: np.ndarray, gs: dict[str, np.ndarray]) -> np.ndarray:
+        return pack_mappo_obs_slots(
+            locals_k, gs["map"], gs["village"][:20], gs["village"][20:]
+        )
 
     def _get_global_from_state(self) -> dict[str, np.ndarray]:
         st = self.inner.game_state
         assert st is not None
         return self._global_state(st)
-
-    def _get_current_bot_local_obs(self) -> np.ndarray | None:
-        st = self.inner.game_state
-        assert st is not None
-        village = st.villages[self.team]
-        alive = [b for b in village.bots if b.is_alive]
-        if not alive:
-            return None
-        self._alive_bot_ids = [b.bot_id for b in alive]
-        self._current_bot_idx = self._current_bot_idx % len(alive)
-        bot = alive[self._current_bot_idx]
-        return self.inner._get_single_bot_obs(bot.bot_id, self.team)
 
     def _step_opponent_bots(self) -> None:
         st = self.inner.game_state
@@ -189,58 +191,67 @@ class MAPPOBotEnv(gym.Env):
         options: dict[str, Any] | None = None,
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
-        self._current_bot_idx = 0
         _, info = self.inner.reset(seed=seed, options=options)
         if self.np_random.random() < 0.1:
             self._load_opponent()
         gs = self._get_global_from_state()
+        st = self.inner.game_state
+        assert st is not None
         info = dict(info)
         info["global_state"] = gs
-        local = self._get_current_bot_local_obs()
-        if local is None:
-            local = np.zeros((self._local_dim,), dtype=np.float32)
-        packed = self._pack(local, gs)
+        mat = self._locals_matrix(st)
+        packed = self._pack_slots(mat, gs)
         return packed, info
 
     def step(self, action: Any) -> tuple[np.ndarray, SupportsFloat, bool, bool, dict[str, Any]]:
         st0 = self.inner.game_state
         assert st0 is not None
         village = st0.villages[self.team]
-        alive = [b for b in village.bots if b.is_alive]
-        learner_action = int(action)
+        alive = sorted((b for b in village.bots if b.is_alive), key=lambda b: int(b.bot_id))
+
+        acts = np.asarray(action, dtype=np.int64).reshape(-1)
+        if acts.shape[0] != self._n_bot_slots:
+            raise ValueError(
+                f"Expected {self._n_bot_slots} actions, got shape {acts.shape}"
+            )
 
         if not alive:
             gs = self._get_global_from_state()
+            z = np.zeros((self._n_bot_slots, self._local_dim), dtype=np.float32)
             info = {**self.inner._info_dict(), "global_state": gs}
-            z = np.zeros((self._local_dim,), dtype=np.float32)
-            return self._pack(z, gs), 0.0, True, False, info
+            return self._pack_slots(z, gs), 0.0, True, False, info
 
         self.inner.snapshot_bot_positions_for_tick()
         self.inner.begin_mappo_tick()
 
-        idx = self._current_bot_idx % len(alive)
-        bot = alive[idx]
-        self.inner._controlled_bot_id = bot.bot_id
-        self.inner.queue_bot_action(self.team, bot.bot_id, learner_action)
-        self._current_bot_idx = (idx + 1) % len(alive)
+        controlled: list[tuple[int, int]] = []
+        for i, bot in enumerate(alive[: self._n_bot_slots]):
+            a = int(acts[i])
+            self.inner.queue_bot_action(self.team, bot.bot_id, a)
+            controlled.append((bot.bot_id, a))
+        if controlled:
+            self.inner._controlled_bot_id = controlled[0][0]
 
         self._step_opponent_bots()
 
+        learner_bot_actions = {bid: ac for bid, ac in controlled}
         _, reward, terminated, truncated, info = self.inner._simulation_tick(
             manager_action=None,
-            learner_bot_action=learner_action,
+            learner_bot_action=None,
+            learner_bot_actions=learner_bot_actions,
         )
 
         gs = self._get_global_from_state()
         info = dict(info)
         info["global_state"] = gs
 
-        next_local = self._get_current_bot_local_obs()
-        if next_local is None:
-            next_local = np.zeros((self._local_dim,), dtype=np.float32)
+        st1 = self.inner.game_state
+        assert st1 is not None
+        mat = self._locals_matrix(st1)
+        if not any(b.is_alive for b in st1.villages[self.team].bots):
             terminated = True
 
-        packed = self._pack(next_local, gs)
+        packed = self._pack_slots(mat, gs)
         return packed, reward, terminated, truncated, info
 
     def render(self) -> Any:

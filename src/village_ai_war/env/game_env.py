@@ -190,13 +190,15 @@ class GameEnv(gym.Env):
         self,
         *,
         manager_action: dict[str, Any] | None,
-        learner_bot_action: int | None,
+        learner_bot_action: int | None = None,
+        learner_bot_actions: dict[int, int] | None = None,
     ) -> tuple[Any, float, bool, bool, dict[str, Any]]:
         """Run combat/economy/buildings after bot actions queued via :meth:`queue_bot_action`."""
         out = self._run_simulation_phase(
             self._melee_intents,
             manager_action=manager_action,
             learner_bot_action=learner_bot_action,
+            learner_bot_actions=learner_bot_actions,
         )
         self._melee_intents.clear()
         return out
@@ -454,12 +456,14 @@ class GameEnv(gym.Env):
         melee_intents: list[tuple[int, int, tuple[int, int]]],
         *,
         manager_action: dict[str, Any] | None,
-        learner_bot_action: int | None,
+        learner_bot_action: int | None = None,
+        learner_bot_actions: dict[int, int] | None = None,
     ) -> tuple[Any, float, bool, bool, dict[str, Any]]:
         return self._run_simulation_phase(
             melee_intents,
             manager_action=manager_action,
             learner_bot_action=learner_bot_action,
+            learner_bot_actions=learner_bot_actions,
         )
 
     def _run_simulation_phase(
@@ -467,7 +471,8 @@ class GameEnv(gym.Env):
         melee_intents: list[tuple[int, int, tuple[int, int]]],
         *,
         manager_action: dict[str, Any] | None,
-        learner_bot_action: int | None,
+        learner_bot_action: int | None = None,
+        learner_bot_actions: dict[int, int] | None = None,
     ) -> tuple[Any, float, bool, bool, dict[str, Any]]:
         assert self._state is not None
         state = self._state
@@ -517,7 +522,7 @@ class GameEnv(gym.Env):
             else:
                 vil.ticks_without_progress += 1
 
-        won = GameEnv._terminal_update(state, self.config)
+        won, term_reason = GameEnv._terminal_update(state, self.config)
         if won is not None:
             terminated = True
         if state.tick >= state.max_ticks:
@@ -531,7 +536,18 @@ class GameEnv(gym.Env):
         state.tick += 1
 
         reward: float
-        if self.mode == "bot" and learner_bot_action is not None:
+        if self.mode == "bot" and learner_bot_actions is not None:
+            mode = state.villages[self.team].global_reward_mode
+            reward = 0.0
+            for bid, act in learner_bot_actions.items():
+                bot = next(
+                    (b for v in state.villages for b in v.bots if b.bot_id == bid),
+                    None,
+                )
+                if bot is not None:
+                    bev = self._bot_events_for(bot, merged, int(act), state)
+                    reward += float(BotRewardCalculator.compute(bev, bot, mode, self.config))
+        elif self.mode == "bot" and learner_bot_action is not None:
             bot = next(
                 (
                     b
@@ -571,6 +587,19 @@ class GameEnv(gym.Env):
             "bots_alive": bots_alive,
             "winner": state.winner,
         }
+        if truncated:
+            info["terminal_reason"] = "max_ticks"
+            info["episode_outcome"] = "truncated"
+        elif terminated:
+            if term_reason is not None:
+                info["terminal_reason"] = term_reason
+            w = state.winner
+            if w is None:
+                info["episode_outcome"] = "draw"
+            elif w == self.team:
+                info["episode_outcome"] = "win"
+            else:
+                info["episode_outcome"] = "loss"
         return obs, reward, terminated, truncated, info
 
     def _apply_village_decision(self, team: int, dec: Mapping[str, Any]) -> None:
@@ -850,28 +879,34 @@ class GameEnv(gym.Env):
         return ev
 
     @staticmethod
-    def _terminal_update(state: GameState, config: Mapping[str, Any]) -> int | None:
-        """Set ``is_done``/``winner`` if TH destroyed or stalemate."""
+    def _terminal_update(
+        state: GameState, config: Mapping[str, Any]
+    ) -> tuple[int | None, str | None]:
+        """Set ``is_done``/``winner`` if TH destroyed or stalemate.
+
+        Returns ``(winner_team_id, terminal_reason)`` when the episode ends from this
+        check; otherwise ``(None, None)``. ``winner_team_id`` is ``None`` for a draw.
+        """
         for v in state.villages:
             ths = [b for b in v.buildings if b.building_type == BuildingType.TOWNHALL]
             if ths and ths[0].hp <= 0:
                 state.is_done = True
                 state.winner = 1 - v.team
-                return int(state.winner)
+                return int(state.winner), "townhall_destroyed"
         alive0 = sum(1 for b in state.villages[0].bots if b.is_alive)
         alive1 = sum(1 for b in state.villages[1].bots if b.is_alive)
         if alive0 == 0 and alive1 == 0:
             state.is_done = True
             state.winner = None
-            return None
+            return None, "mutual_elimination"
         if alive0 == 0:
             state.is_done = True
             state.winner = 1
-            return 1
+            return 1, "team0_eliminated"
         if alive1 == 0:
             state.is_done = True
             state.winner = 0
-            return 0
+            return 0, "team1_eliminated"
 
         thresh = int(config["rewards"]["village"]["stagnation_threshold"])
         if state.villages[0].ticks_without_progress >= thresh and state.villages[
@@ -879,5 +914,5 @@ class GameEnv(gym.Env):
         ].ticks_without_progress >= thresh:
             state.is_done = True
             state.winner = None
-            return None
-        return None
+            return None, "stagnation"
+        return None, None

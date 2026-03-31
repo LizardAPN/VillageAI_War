@@ -19,7 +19,12 @@ from village_ai_war.agents.village_obs_builder import VillageObsBuilder
 from village_ai_war.env.game_env import GameEnv
 from village_ai_war.env.map_generator import generate_initial_state
 from village_ai_war.models.mappo_critic import MAPPOCentralizedCritic
-from village_ai_war.models.mappo_layout import mappo_local_dim, mappo_obs_dim, pack_mappo_obs
+from village_ai_war.models.mappo_layout import (
+    mappo_local_dim,
+    mappo_obs_dim,
+    pack_mappo_obs,
+    pack_mappo_obs_slots,
+)
 from village_ai_war.models.mappo_policy import MAPPOPolicy
 from village_ai_war.training.mappo_env import MAPPOBotEnv
 
@@ -168,7 +173,9 @@ def test_queue_and_simulation_tick_matches_step_with_opponent() -> None:
 
 def test_mappo_layout_and_critic_shapes() -> None:
     n = 12
+    k = 16
     assert mappo_obs_dim(n) == mappo_local_dim() + n * n * 6 + 40
+    assert mappo_obs_dim(n, k) == k * mappo_local_dim() + n * n * 6 + 40
     import torch
 
     crit = MAPPOCentralizedCritic(map_shape=(n, n, 6), village_vec_dim=40, hidden_dim=64)
@@ -181,13 +188,16 @@ def test_mappo_layout_and_critic_shapes() -> None:
 
 def test_mappo_bot_env_and_policy(tmp_path: Path) -> None:
     cfg = _tiny()
+    k = int(cfg["game"]["max_bots_for_role_change"])
     pool = tmp_path / "bot_pool"
     env = MAPPOBotEnv(cfg, team=0, opponent_pool_dir=str(pool))
     obs, info = env.reset(seed=0)
-    assert obs.shape == (mappo_obs_dim(12),)
+    assert obs.shape == (mappo_obs_dim(12, k),)
+    assert env.action_space.shape == (k,)
     assert "global_state" in info
     assert info["global_state"]["map"].shape == (12, 12, 6)
-    obs2, _r, _t, _tr, info2 = env.step(0)
+    noop = np.zeros((k,), dtype=np.int64)
+    obs2, _r, _t, _tr, info2 = env.step(noop)
     assert obs2.shape == obs.shape
     assert "global_state" in info2
     env.close()
@@ -201,11 +211,11 @@ def test_mappo_bot_env_and_policy(tmp_path: Path) -> None:
         n_steps=64,
         batch_size=32,
         verbose=0,
-        policy_kwargs={"map_size": 12, "critic_hidden_dim": 64},
+        policy_kwargs={"map_size": 12, "critic_hidden_dim": 64, "n_bot_slots": k},
     )
     obs = venv.reset()
     act, _ = model.predict(obs, deterministic=True)
-    assert act.shape == (1,)
+    assert act.shape == (1, k)
     venv.close()
 
 
@@ -217,3 +227,24 @@ def test_pack_mappo_obs_roundtrip_dims() -> None:
     v1 = np.zeros((20,), dtype=np.float32)
     p = pack_mappo_obs(loc, mp, v0, v1)
     assert p.shape == (mappo_obs_dim(n),)
+    k = 3
+    locs = np.zeros((k, mappo_local_dim()), dtype=np.float32)
+    ps = pack_mappo_obs_slots(locs, mp, v0, v1)
+    assert ps.shape == (mappo_obs_dim(n, k),)
+
+
+def test_game_env_terminal_info_keys() -> None:
+    cfg = _tiny()
+    cfg["game"]["max_ticks"] = 5
+    e = GameEnv(cfg, mode="bot", team=0, render_mode=None)
+    e.reset(seed=0)
+    seen = False
+    for _ in range(30):
+        _o, _r, t, tr, info = e.step(0)
+        if t or tr:
+            assert "episode_outcome" in info
+            assert "terminal_reason" in info
+            seen = True
+            break
+    assert seen
+    e.close()
