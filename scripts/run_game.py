@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Play: human vs MAPPO (2D), or passive demo with random village manager steps."""
+"""Play: human vs MAPPO (2D), MAPPO vs same MAPPO (no human), or random village demo."""
 
 from __future__ import annotations
 
@@ -17,7 +17,10 @@ from loguru import logger
 from village_ai_war.config_load import load_project_config
 from village_ai_war.env.game_env import GameEnv
 from village_ai_war.play.human_controls import collect_blue_bot_actions_for_tick
-from village_ai_war.play.mappo_human_tick import play_mappo_human_tick
+from village_ai_war.play.mappo_human_tick import (
+    play_mappo_human_tick,
+    play_mappo_self_play_tick,
+)
 
 
 def _resolve_ckpt(path_str: str | None) -> Path | None:
@@ -61,6 +64,10 @@ def _run_random_village_demo(
         )
         env = GameEnv(flat, mode="village", team=0, render_mode=None)
 
+    # 3D render needs a real GameState; it is only set after reset().
+    rng = np.random.default_rng(seed)
+    _obs, _ = env.reset(seed=seed)
+
     if env.render_mode == "human_3d":
         try:
             env.render()
@@ -82,11 +89,9 @@ def _run_random_village_demo(
                 )
                 env.close()
                 env = GameEnv(flat, mode="village", team=0, render_mode="human")
+                _obs, _ = env.reset(seed=seed)
             else:
                 raise
-
-    rng = np.random.default_rng(seed)
-    _obs, _ = env.reset(seed=seed)
 
     if env.render_mode is not None:
         logger.info(
@@ -114,13 +119,19 @@ def main() -> None:
         module="pygame.pkgdata",
     )
     parser = argparse.ArgumentParser(
-        description="Village AI War: human vs MAPPO, or random village-manager demo."
+        description="Village AI War: human vs MAPPO, MAPPO self-play, or random village demo."
     )
     parser.add_argument(
         "--mappo-opponent",
         default="",
         help="Path to MAPPO zip (e.g. checkpoints/bots_mappo/mappo_bot_final.zip). "
         "Human plays BLUE vs MAPPO on RED; no village AI (training-faithful micro).",
+    )
+    parser.add_argument(
+        "--mappo-self-play",
+        default="",
+        help="Path to MAPPO zip: RED and BLUE both use this checkpoint (no human). "
+        "Opens 2D pygame if a display is available, otherwise runs headless.",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-steps", type=int, default=500)
@@ -138,9 +149,18 @@ def main() -> None:
 
     flat = load_project_config(_ROOT)
     mappo_path = _resolve_ckpt(args.mappo_opponent or None)
+    self_play_path = _resolve_ckpt(args.mappo_self_play.strip() or None)
+
+    if str(args.mappo_opponent).strip() and str(args.mappo_self_play).strip():
+        logger.error("Use only one of --mappo-opponent or --mappo-self-play.")
+        sys.exit(1)
 
     if str(args.mappo_opponent).strip() and mappo_path is None:
         logger.error("MAPPO checkpoint not found: {}", args.mappo_opponent)
+        sys.exit(1)
+
+    if str(args.mappo_self_play).strip() and self_play_path is None:
+        logger.error("MAPPO checkpoint not found: {}", args.mappo_self_play)
         sys.exit(1)
 
     if mappo_path is not None:
@@ -199,6 +219,56 @@ def main() -> None:
                     overlay_lines=(
                         f"tick={info.get('tick', '?')}  t={t}",
                         "Next: choose BLUE bot actions",
+                    )
+                )
+            if term or trunc:
+                logger.info("Done at t={} info={}", t, info)
+                break
+        env.close()
+        return
+
+    if self_play_path is not None:
+        if args.human_3d:
+            logger.warning(
+                "MAPPO self-play uses 2D pygame only when a display is available; "
+                "ignoring --human-3d."
+            )
+        try:
+            env = GameEnv(flat, mode="bot", team=0, render_mode="human")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Display unavailable ({}); headless MAPPO self-play", e)
+            env = GameEnv(flat, mode="bot", team=0, render_mode=None)
+
+        try:
+            mappo_model = _load_mappo_policy(self_play_path, flat)
+        except Exception as e:  # noqa: BLE001
+            logger.error("Failed to load MAPPO from {}: {}", self_play_path, e)
+            sys.exit(1)
+        logger.info("Loaded MAPPO for self-play from {}", self_play_path)
+
+        n_slots = int(flat["game"]["max_bots_for_role_change"])
+        env.reset(seed=args.seed)
+
+        if env.render_mode is not None:
+            logger.info(
+                "MAPPO vs MAPPO (same checkpoint) | max_steps={} | ESC/close to quit",
+                args.max_steps,
+            )
+        else:
+            logger.info("MAPPO self-play (headless) | max_steps={}", args.max_steps)
+
+        for t in range(args.max_steps):
+            _obs, _r, term, trunc, info = play_mappo_self_play_tick(
+                env,
+                mappo_model,
+                n_bot_slots=n_slots,
+                deterministic=args.deterministic,
+            )
+            if env.render_mode is not None:
+                env.render(
+                    overlay_lines=(
+                        f"tick={info.get('tick', '?')}  t={t}",
+                        "RED vs BLUE — same MAPPO weights",
                     )
                 )
             if term or trunc:

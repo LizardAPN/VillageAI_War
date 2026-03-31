@@ -26,7 +26,10 @@ from village_ai_war.models.mappo_layout import (
     pack_mappo_obs_slots,
 )
 from village_ai_war.models.mappo_policy import MAPPOPolicy
-from village_ai_war.play.mappo_human_tick import play_mappo_human_tick
+from village_ai_war.play.mappo_human_tick import (
+    play_mappo_human_tick,
+    play_mappo_self_play_tick,
+)
 from village_ai_war.play.mappo_obs import (
     build_mappo_global_state,
     build_mappo_locals_matrix,
@@ -267,6 +270,38 @@ def test_play_mappo_human_tick_smoke(tmp_path: Path) -> None:
         ge,
         loaded,
         human,
+        n_bot_slots=k,
+        deterministic=True,
+    )
+    ge.close()
+
+
+def test_play_mappo_self_play_tick_smoke(tmp_path: Path) -> None:
+    cfg = _tiny()
+    k = int(cfg["game"]["max_bots_for_role_change"])
+    venv = DummyVecEnv([lambda: MAPPOBotEnv(cfg)])
+    model = PPO(
+        MAPPOPolicy,
+        venv,
+        n_steps=64,
+        batch_size=32,
+        verbose=0,
+        policy_kwargs={"map_size": 12, "critic_hidden_dim": 64, "n_bot_slots": k},
+    )
+    save_p = tmp_path / "mappo_self"
+    model.save(str(save_p))
+    venv.close()
+
+    loaded = PPO.load(
+        str(save_p.with_suffix(".zip")),
+        device="cpu",
+        custom_objects={"lr_schedule": lambda _: 0.0, "clip_range": lambda _: 0.0},
+    )
+    ge = GameEnv(cfg, mode="bot", team=0, render_mode=None)
+    ge.reset(seed=42)
+    _o, _r, _t, _tr, _info = play_mappo_self_play_tick(
+        ge,
+        loaded,
         n_bot_slots=k,
         deterministic=True,
     )

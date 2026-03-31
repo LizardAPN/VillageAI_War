@@ -83,3 +83,80 @@ def play_mappo_human_tick(
         learner_bot_action=None,
         learner_bot_actions=learner_bot_actions,
     )
+
+
+def play_mappo_self_play_tick(
+    env: GameEnv,
+    mappo_model: Any,
+    *,
+    n_bot_slots: int,
+    deterministic: bool = False,
+) -> tuple[Any, SupportsFloat, bool, bool, dict[str, Any]]:
+    """One tick: the same MAPPO policy controls RED and BLUE (no human).
+
+    Uses the same packed observation layout as training: fixed team-0 map / village
+    order in the global tail (:func:`build_mappo_global_state`), with local bot
+    slots built separately for team 0 and team 1.
+
+    Requires ``env.mode == \"bot\"`` and ``env.team == 0``.
+    """
+    if env.mode != "bot":
+        raise ValueError("play_mappo_self_play_tick requires GameEnv mode='bot'")
+    if env.team != 0:
+        raise ValueError("play_mappo_self_play_tick requires GameEnv team=0")
+    state = env.game_state
+    assert state is not None
+
+    gs = build_mappo_global_state(state, env._vil_obs)
+
+    def _acts_for_team(mappo_team: int) -> np.ndarray:
+        mat = build_mappo_locals_matrix(
+            state,
+            env,
+            mappo_team=mappo_team,
+            n_bot_slots=n_bot_slots,
+        )
+        packed = pack_mappo_observation_vector(mat, gs)
+        acts, _ = mappo_model.predict(packed, deterministic=deterministic)
+        return np.asarray(acts, dtype=np.int64).reshape(-1)
+
+    acts_red = _acts_for_team(0)
+    acts_blue = _acts_for_team(1)
+    if acts_red.shape[0] != n_bot_slots:
+        raise ValueError(
+            f"MAPPO expected {n_bot_slots} red actions, got {acts_red.shape[0]}"
+        )
+    if acts_blue.shape[0] != n_bot_slots:
+        raise ValueError(
+            f"MAPPO expected {n_bot_slots} blue actions, got {acts_blue.shape[0]}"
+        )
+
+    red_alive = sorted(
+        (b for b in state.villages[0].bots if b.is_alive),
+        key=lambda b: int(b.bot_id),
+    )
+    blue_alive = sorted(
+        (b for b in state.villages[1].bots if b.is_alive),
+        key=lambda b: int(b.bot_id),
+    )
+
+    env.snapshot_bot_positions_for_tick()
+    env.begin_mappo_tick()
+
+    controlled: list[tuple[int, int]] = []
+    for i, bot in enumerate(red_alive[:n_bot_slots]):
+        a = int(acts_red[i])
+        env.queue_bot_action(0, bot.bot_id, a)
+        controlled.append((bot.bot_id, a))
+    if controlled:
+        env._controlled_bot_id = controlled[0][0]
+
+    for i, bot in enumerate(blue_alive[:n_bot_slots]):
+        env.queue_bot_action(1, bot.bot_id, int(acts_blue[i]))
+
+    learner_bot_actions = {bid: ac for bid, ac in controlled}
+    return env._simulation_tick(
+        manager_action=None,
+        learner_bot_action=None,
+        learner_bot_actions=learner_bot_actions,
+    )
