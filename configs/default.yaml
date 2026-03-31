@@ -34,6 +34,11 @@ rendering:
   legend_width_3d: 268
   camera_fov_deg: 50
   camera_dist_scale: 1.4
+  # zoom: distance *= camera_zoom_mul (wheel over map, +/- / PgUp/PgDn)
+  camera_zoom_mul_min: 0.22
+  camera_zoom_mul_max: 2.85
+  camera_zoom_wheel_step: 0.11
+  camera_dist_min: 3.5
   camera_pitch_deg: 32
   camera_yaw_deg: 40
   # 0 = fixed / mouse+keys only; set e.g. 10 for idle spin
