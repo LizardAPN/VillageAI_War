@@ -29,6 +29,12 @@ class VillageRewardCalculator:
         ) / 1000.0
         r += eco
 
+        food = int(village_state.resources.food)
+        fthresh = int(rcfg.get("food_security_threshold", 100))
+        fbonus = float(rcfg.get("food_security_bonus", 0.0))
+        if food > fthresh and fbonus != 0.0:
+            r += float(food - fthresh) * fbonus
+
         if "kills" in events and isinstance(events["kills"], dict):
             r += float(rcfg["kill_reward"]) * float(events["kills"].get(team, 0))
         if "losses" in events and isinstance(events["losses"], dict):

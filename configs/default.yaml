@@ -9,13 +9,13 @@ defaults:
   - _self_
 
 game:
-  max_ticks: 2000
+  max_ticks: 3000
   manager_interval: 5
   initial_resources:
-    wood: 200
-    stone: 100
-    food: 500
-  initial_bots: 10
+    wood: 150
+    stone: 80
+    food: 400
+  initial_bots: 8
   initial_buildings:
     - barracks
     - storage

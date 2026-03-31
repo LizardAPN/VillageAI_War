@@ -45,3 +45,18 @@ def test_win_terminal() -> None:
         won=True,
     )
     assert r >= 1000.0
+
+
+def test_food_security_bonus() -> None:
+    cfg = {
+        "rewards": {
+            "village": {
+                **_cfg()["rewards"]["village"],
+                "food_security_bonus": 0.02,
+                "food_security_threshold": 100,
+            }
+        }
+    }
+    v = VillageState(team=0, resources=ResourceStock(food=150))
+    r = VillageRewardCalculator.compute({}, v, cfg, terminated=False, won=None)
+    assert r >= (150 - 100) * 0.02

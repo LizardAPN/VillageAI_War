@@ -7,7 +7,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from village_ai_war.exceptions import InsufficientResourcesError, InvalidActionError
-from village_ai_war.state import BuildingState, BuildingType, GameState, TerrainType
+from village_ai_war.state import BuildingState, BuildingType, GameState, Role, TerrainType
 
 
 class BuildingSystem:
@@ -15,22 +15,48 @@ class BuildingSystem:
 
     @staticmethod
     def construction_tick(state: GameState, config: Mapping[str, Any]) -> dict[str, Any]:
-        """Advance blueprint progress; complete buildings.
+        """Advance blueprint progress when an ally builder is adjacent; complete buildings.
 
         Returns:
-            Events with ``buildings_completed`` list of ``(team, building_id)``.
+            Events with ``buildings_completed`` and ``block_placed_by_bot`` (progress share).
         """
         bcfg = config["buildings"]
-        events: dict[str, Any] = {"buildings_completed": []}
-        progress_per_tick = 0.05
+        events: dict[str, Any] = {"buildings_completed": [], "block_placed_by_bot": {}}
+        block_by_bot: dict[int, float] = events["block_placed_by_bot"]
 
         still: list[dict[str, Any]] = []
         for bp in state.blueprints:
             team = int(bp["team"])
             btype = BuildingType(int(bp["building_type"]))
             pos = tuple(bp["position"])
+            px, py = int(pos[0]), int(pos[1])
+            key = btype.name.lower()
+            bdef = bcfg.get(key)
+            if not isinstance(bdef, Mapping):
+                bdef = {}
+            ticks = int(bdef.get("construction_ticks", 20))
+            step = 1.0 / max(ticks, 1)
+
+            adjacent_builders: list[int] = []
+            for v in state.villages:
+                if v.team != team:
+                    continue
+                for bot in v.bots:
+                    if not bot.is_alive or bot.role != Role.BUILDER:
+                        continue
+                    bx, by = bot.position
+                    if abs(bx - px) + abs(by - py) == 1:
+                        adjacent_builders.append(bot.bot_id)
+
             prog = float(bp.get("progress", 0.0))
-            prog = min(1.0, prog + progress_per_tick)
+            if adjacent_builders:
+                room = 1.0 - prog
+                delta = min(step, room)
+                prog = prog + delta
+                share = delta / len(adjacent_builders)
+                for bid in adjacent_builders:
+                    block_by_bot[bid] = block_by_bot.get(bid, 0.0) + share
+
             bp["progress"] = prog
             if prog >= 1.0:
                 hp = BuildingSystem._max_hp(btype, bcfg)

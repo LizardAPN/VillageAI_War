@@ -39,8 +39,16 @@ class EconomySystem:
         bot_cost_food = int(ecfg["bot_cost"]["food"])
         farm_bonus = float(ecfg.get("farm_food_bonus", 0.5))
 
+        resource_by_bot: dict[int, int] = {}
+
+        def add_resource_bot(bot_id: int, amt: int) -> None:
+            if amt <= 0:
+                return
+            resource_by_bot[bot_id] = resource_by_bot.get(bot_id, 0) + amt
+
         events: dict[str, Any] = {
             "resource_collected": {0: 0, 1: 0},
+            "resource_collected_by_bot": resource_by_bot,
             "wood_delta": {0: 0, 1: 0},
             "stone_delta": {0: 0, 1: 0},
             "food_delta": {0: 0, 1: 0},
@@ -83,15 +91,18 @@ class EconomySystem:
                     village.resources.wood += take
                     events["resource_collected"][team] += take
                     events["wood_delta"][team] += take
+                    add_resource_bot(bot.bot_id, take)
                 elif layer == int(ResourceLayer.STONE):
                     village.resources.stone += take
                     events["resource_collected"][team] += take
                     events["stone_delta"][team] += take
+                    add_resource_bot(bot.bot_id, take)
                 elif layer == int(ResourceLayer.FIELD):
                     prod = int(take * food_mult)
                     village.resources.food += prod
                     events["food_produced"][team] += prod
                     events["food_delta"][team] += prod
+                    add_resource_bot(bot.bot_id, prod)
 
             alive = [b for b in village.bots if b.is_alive]
             need = food_per_bot * len(alive)

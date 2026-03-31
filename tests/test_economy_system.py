@@ -86,6 +86,7 @@ def test_gatherer_collects_wood() -> None:
     ev = EconomySystem.step(g, cfg)
     assert g.villages[0].resources.wood > 0
     assert ev["wood_delta"][0] > 0
+    assert ev["resource_collected_by_bot"].get(0, 0) > 0
 
 
 def test_hunger_when_no_food() -> None:

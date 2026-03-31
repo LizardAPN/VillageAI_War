@@ -355,6 +355,7 @@ class UnifiedBotSelfPlayEnv(gym.Env):
 
     def step(self, action: Any) -> tuple[np.ndarray, SupportsFloat, bool, bool, dict[str, Any]]:
         assert self.inner._state is not None and self.inner._rng is not None
+        self.inner.snapshot_bot_positions_for_tick()
         melee_intents: list[tuple[int, int, tuple[int, int]]] = []
 
         # --- bot phase ---
@@ -421,7 +422,9 @@ class UnifiedBotSelfPlayEnv(gym.Env):
         )
         if bot_state is not None:
             mode = self.inner._state.villages[0].global_reward_mode
-            bev = GameEnv._bot_events_for(bot_state, self.inner._last_tick_merged, learner_action)
+            bev = self.inner._bot_events_for(
+                bot_state, self.inner._last_tick_merged, learner_action, self.inner._state
+            )
             reward = float(BotRewardCalculator.compute(bev, bot_state, mode, self.inner.config))
         else:
             reward = 0.0

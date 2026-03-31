@@ -3,19 +3,19 @@ combat:
   stats:
     warrior:
       hp: 100
-      damage: 25
+      damage: 20
       attack_range: 1
     gatherer:
-      hp: 80
-      damage: 8
-      attack_range: 1
-    farmer:
       hp: 70
       damage: 5
       attack_range: 1
-    builder:
-      hp: 80
-      damage: 8
+    farmer:
+      hp: 60
+      damage: 3
       attack_range: 1
-  tower_damage: 15
+    builder:
+      hp: 75
+      damage: 5
+      attack_range: 1
+  tower_damage: 12
   tower_range: 3
