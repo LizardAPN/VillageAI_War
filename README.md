@@ -66,9 +66,9 @@ The default config composes `training: train_bots_selfplay` (see [`configs/defau
 
 **Stage 4 — MAPPO bot self-play (Baseline v1)**
 
-Centralized critic + parameter sharing with round-robin control of allied bots per env step (`MAPPOBotEnv`). Checkpoints under `checkpoints/bots_mappo/`; pool snapshots `checkpoints/pool/bots/mappo_bot_iter*.zip`. Uses **TensorBoard** only (`logging.use_tensorboard` in [`configs/training/train_mappo_bots.yaml`](configs/training/train_mappo_bots.yaml); scalars under `logs/mappo_bots/`).
+Centralized critic + parameter sharing with round-robin control of allied bots per env step (`MAPPOBotEnv`). Checkpoints under `checkpoints/bots_mappo/`; self-play **snapshots** go to `checkpoints/pool/bots_mappo/mappo_bot_iter*.zip` (extended obs). **Opponents** are sampled only from `checkpoints/pool/bots/*.zip` and must be **181-dim** (stage 1 / unified bot). Uses **TensorBoard** only (`logging.use_tensorboard` in [`configs/training/train_mappo_bots.yaml`](configs/training/train_mappo_bots.yaml); scalars under `logs/mappo_bots/`).
 
-Opponent `PPO` policies must use the **same 181-dim** `Box` as plain bot mode; MAPPO learner zips (extended observation) are **skipped** when sampling the pool so `predict` never sees a shape mismatch. If nothing matches, opponents act at random until a compatible checkpoint appears (e.g. stage 1 / unified bot zips).
+Files named `mappo_bot*.zip` under `pool/bots/` are **ignored** (treat as misplaced MAPPO saves). If there is no usable 181-dim checkpoint, only **SubprocVecEnv worker 0** logs a single WARNING (other workers stay silent). Add at least one stage-1-style bot zip in `pool/bots/` for real self-play.
 
 ```bash
 python scripts/run_training.py training=train_mappo_bots
@@ -157,7 +157,8 @@ python scripts/evaluate.py
 |------|-----------|
 | `checkpoints/bots/bot_final.zip` | Stage 1 policy (best eval mean reward when `training.eval_freq > 0`, else last iteration) |
 | `checkpoints/bots_mappo/mappo_bot_final.zip` | Stage 4 MAPPO policy (last save after all self-play iterations) |
-| `checkpoints/pool/bots/*.zip` | Historical bot policies for self-play (includes `mappo_bot_iter*.zip` when using stage 4) |
+| `checkpoints/pool/bots/*.zip` | 181-dim bot policies (opponents for MAPPO and stage 1) |
+| `checkpoints/pool/bots_mappo/*.zip` | MAPPO training snapshots (extended obs; not used as opponents) |
 | `checkpoints/village/village_final.zip` | Stage 2 manager (same best-vs-last rule as bots) |
 | `checkpoints/pool/village/*.zip` | Historical village policies for self-play |
 | `checkpoints/joint/joint_final.zip` | Stage 3 output |

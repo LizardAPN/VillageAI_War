@@ -39,11 +39,15 @@ def run_mappo_bots_training(cfg: Any) -> None:
     """MAPPO (PPO + centralized critic) with growing opponent checkpoint pool."""
     flat = _flat_cfg(cfg)
     tcfg = flat["training"]
-    pool_dir = Path(tcfg["pool_dir"]) / "bots"
-    pool_dir.mkdir(parents=True, exist_ok=True)
+    pool_root = Path(tcfg["pool_dir"])
+    # Opponents must be 181-dim (stage 1 / unified bot); MAPPO zips go elsewhere.
+    opponent_pool_dir = pool_root / "bots"
+    opponent_pool_dir.mkdir(parents=True, exist_ok=True)
+    mappo_pool_dir = pool_root / str(tcfg.get("mappo_pool_subdir", "bots_mappo"))
+    mappo_pool_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = Path(tcfg["checkpoint_dir"]) / "bots_mappo"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    pool_manager = PoolManager(pool_dir, max_size=int(tcfg.get("pool_max_size", 15)))
+    pool_manager = PoolManager(mappo_pool_dir, max_size=int(tcfg.get("pool_max_size", 15)))
 
     n = int(flat["map"]["size"])
 
@@ -57,8 +61,9 @@ def run_mappo_bots_training(cfg: Any) -> None:
             return MAPPOBotEnv(
                 flat,
                 team=0,
-                opponent_pool_dir=str(pool_dir),
+                opponent_pool_dir=str(opponent_pool_dir),
                 opponent_sampling=str(tcfg.get("opponent_sampling", "uniform")),
+                vec_env_index=_rank,
             )
 
         return _init
@@ -114,7 +119,7 @@ def run_mappo_bots_training(cfg: Any) -> None:
             reset_num_timesteps=(iteration == 0),
             tb_log_name="mappo_bot_selfplay",
         )
-        stem = pool_dir / f"mappo_bot_iter{iteration}"
+        stem = mappo_pool_dir / f"mappo_bot_iter{iteration}"
         model.save(str(stem))
         pool_manager.add(Path(str(stem) + ".zip"))
 

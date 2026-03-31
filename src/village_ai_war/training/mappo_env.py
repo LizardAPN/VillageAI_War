@@ -39,6 +39,8 @@ class MAPPOBotEnv(gym.Env):
         team: int = 0,
         opponent_pool_dir: str = "checkpoints/pool/bots",
         opponent_sampling: str = "uniform",
+        *,
+        vec_env_index: int = 0,
     ) -> None:
         super().__init__()
         self._flat_cfg = _as_plain_config(config)
@@ -59,9 +61,12 @@ class MAPPOBotEnv(gym.Env):
 
         self.opponent_pool_dir = Path(opponent_pool_dir)
         self.opponent_sampling = opponent_sampling
+        self._vec_env_index = int(vec_env_index)
         self._opponent_policy: PPO | None = None
         self._current_bot_idx: int = 0
         self._alive_bot_ids: list[int] = []
+        self._skip_opponent_logged: set[str] = set()
+        self._warned_no_compatible_opponent: bool = False
 
         self.village_obs_builder = VillageObsBuilder(n)
         self._load_opponent()
@@ -76,9 +81,18 @@ class MAPPOBotEnv(gym.Env):
 
     def _load_opponent(self) -> None:
         self.opponent_pool_dir.mkdir(parents=True, exist_ok=True)
-        checkpoints = sorted(self.opponent_pool_dir.glob("*.zip"))
+        all_zips = sorted(self.opponent_pool_dir.glob("*.zip"))
+        # MAPPO zips live in pool/bots_mappo/; skip mappo_bot* here to avoid loading them.
+        checkpoints = [p for p in all_zips if not p.name.startswith("mappo_bot")]
+        if not all_zips:
+            self._opponent_policy = None
+            return
         if not checkpoints:
             self._opponent_policy = None
+            self._emit_no_opponent_message(
+                "opponent pool has only mappo_bot_*.zip (skipped); add 181-dim zips or use "
+                "pool/bots_mappo/ for MAPPO — random opponent moves",
+            )
             return
 
         rng = np.random.default_rng()
@@ -96,22 +110,35 @@ class MAPPOBotEnv(gym.Env):
                 logger.debug("Skip opponent {}: {}", ckpt.name, e)
                 continue
             if not self._opponent_obs_compatible(model):
-                logger.debug(
-                    "Skip opponent {}: policy obs {} != inner bot obs {}",
-                    ckpt.name,
-                    getattr(model.observation_space, "shape", None),
-                    self.inner.observation_space.shape,
-                )
+                key = str(ckpt.resolve())
+                if key not in self._skip_opponent_logged:
+                    self._skip_opponent_logged.add(key)
+                    logger.debug(
+                        "Skip opponent {}: policy obs {} != inner bot obs {}",
+                        ckpt.name,
+                        getattr(model.observation_space, "shape", None),
+                        self.inner.observation_space.shape,
+                    )
                 continue
             self._opponent_policy = model
+            self._warned_no_compatible_opponent = False
             logger.debug("Loaded opponent: {}", ckpt.name)
             return
 
-        logger.warning(
-            "No compatible opponent in {} (need Box shape {}); using random opponent moves",
+        self._emit_no_opponent_message(
+            "no compatible opponent in {} (need Box shape {}); using random opponent moves",
             self.opponent_pool_dir,
             self.inner.observation_space.shape,
         )
+
+    def _emit_no_opponent_message(self, msg: str, *args: Any) -> None:
+        """SubprocVecEnv: each process has its own memory — log only from worker 0, once (no DEBUG spam)."""
+        if self._vec_env_index != 0:
+            return
+        if self._warned_no_compatible_opponent:
+            return
+        self._warned_no_compatible_opponent = True
+        logger.warning(msg, *args)
 
     def _global_state(self, state: GameState) -> dict[str, np.ndarray]:
         """Canonical team-0 map POV plus both village vectors (for critic and logging)."""
