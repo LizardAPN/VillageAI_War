@@ -8,3 +8,5 @@ checkpoints/
 wandb/
 outputs/
 .hydra/
+*.egg-info
+.cursor/

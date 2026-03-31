@@ -2,11 +2,21 @@
 
 Custom Gymnasium environment for hierarchical multi-agent reinforcement learning. The **baseline is fully RL-driven**: low-level units are controlled by a learned policy (no movement heuristics), and both teams can be trained with **self-play** against pools of past checkpoints.
 
+### Research baselines (bots)
+
+| | Baseline v0 (legacy stage 1) | Baseline v1 (MAPPO, stage 4) |
+|---|------------------------------|--------------------------------|
+| Algorithm | PPO + `RoleConditionedPolicy` (shared actor–critic on local obs) | PPO + `MAPPOPolicy`: decentralized actor, **centralized critic** on global map + both villages |
+| Coordination | Each bot optimizes its own value signal | Shared critic sees full state (CTDE-style training) |
+| Observation | `BotObsBuilder` only (181-dim) | Concatenation: local bot vector + flattened global map (team-0 POV) + both village vectors (see `MAPPOBotEnv`) |
+
+**Baseline v0 (failed for the full game):** villages often **starved before the economy phase** because local critics did not coordinate gatherers/farmers; other issues included reward plumbing and map scale. That stack remains available as **stage 1** for ablations, but **v1 (MAPPO)** is the recommended bot baseline for comparing new architectures.
+
 ## Architecture
 
-- **Bot agents (low level):** One **role-conditioned** PPO policy (`RoleConditionedPolicy`) — shared backbone plus a learned role embedding from the observation one-hot (see `BotObsBuilder`). All roles share weights.
+- **Bot agents (low level):** Default legacy path uses one **role-conditioned** PPO policy (`RoleConditionedPolicy`) — shared backbone plus a learned role embedding from the observation one-hot (see `BotObsBuilder`). All roles share weights. **MAPPO path (stage 4):** `MAPPOPolicy` with `MAPPOActorExtractor` on the local slice and `MAPPOCentralizedCritic` on the global tail of the observation. The self-play pool still loads standard **181-dim** PPO checkpoints for the opponent; the trained MAPPO policy expects the **extended** observation from `MAPPOBotEnv`.
 - **Village agent (high level):** Strategic manager — **MaskablePPO** with invalid-action masking (`MultiInputPolicy` on dict observations).
-- **Self-play:** Stage 1 samples opponents from `checkpoints/pool/bots/`; stage 2 samples village opponents from `checkpoints/pool/village/`. Empty pools fall back to random opponent actions.
+- **Self-play:** Stages 1 and 4 sample bot opponents from `checkpoints/pool/bots/`; stage 2 samples village opponents from `checkpoints/pool/village/`. Empty pools fall back to random opponent actions.
 - **Unified training:** One Hydra entry point (`training=train_unified`, `training.stage=0`) alternates PPO on bots and MaskablePPO on the red manager. Each environment step matches village self-play order (all bots act, then both managers). Blue bots and blue manager are sampled from the same pools; the non-training partner on red is frozen from the last saved checkpoint until the next phase.
 - **Reward shaping:** Dynamic global reward modes controlled by the village agent (unchanged).
 
@@ -52,9 +62,26 @@ On **Linux**, Mesa packages expose `libGL.so.1` (not `libGL.so`); this project p
 
 ### Training (Hydra)
 
-The default config composes `training: train_bots_selfplay` (see [`configs/default.yaml`](configs/default.yaml)). Stages are selected with `training.stage` (`0` = unified, `1`–`3` = legacy pipeline).
+The default config composes `training: train_bots_selfplay` (see [`configs/default.yaml`](configs/default.yaml)). Stages are selected with `training.stage` (`0` = unified, `1`–`3` = legacy pipeline, `4` = MAPPO bots).
 
-**Stage 1 — bot self-play (role-conditioned PPO)**
+**Stage 4 — MAPPO bot self-play (Baseline v1)**
+
+Centralized critic + parameter sharing with round-robin control of allied bots per env step (`MAPPOBotEnv`). Checkpoints under `checkpoints/bots_mappo/`; pool snapshots `checkpoints/pool/bots/mappo_bot_iter*.zip`. Uses **TensorBoard** only (`logging.use_tensorboard` in [`configs/training/train_mappo_bots.yaml`](configs/training/train_mappo_bots.yaml); scalars under `logs/mappo_bots/`).
+
+Opponent `PPO` policies must use the **same 181-dim** `Box` as plain bot mode; MAPPO learner zips (extended observation) are **skipped** when sampling the pool so `predict` never sees a shape mismatch. If nothing matches, opponents act at random until a compatible checkpoint appears (e.g. stage 1 / unified bot zips).
+
+```bash
+python scripts/run_training.py training=train_mappo_bots
+```
+
+Smoke run:
+
+```bash
+python scripts/run_training.py training=train_mappo_bots \
+  training.total_timesteps=2000 training.n_envs=1 training.selfplay_iterations=2
+```
+
+**Stage 1 — bot self-play (role-conditioned PPO, Baseline v0)**
 
 ```bash
 python scripts/run_training.py training.stage=1
@@ -92,7 +119,7 @@ Configure macro steps with `unified.bot_steps_per_turn`, `unified.village_steps_
 
 The bot phase uses `DummyVecEnv` only so every sub-env shares the in-process `bot_policy_holder`; do not use `SubprocVecEnv` for that phase. Default `game.initial_bots: 1` matches stage 1; more red bots require a live model in the holder for the extra units.
 
-Stages 1–3 remain a supported alternative pipeline.
+Stages 1–3 remain a supported alternative pipeline; stage 4 is the MAPPO baseline for multi-bot coordination research.
 
 **Useful overrides**
 
@@ -102,7 +129,7 @@ python scripts/run_training.py training.total_timesteps=2000 training.n_envs=1
 
 ### Metrics (TensorBoard)
 
-With `logging.use_tensorboard: true` (default) and `tensorboard` installed, stage 1 and 2 write training scalars under `logs/bots/` and `logs/village/`; unified training writes under `logs/unified_bots/` and `logs/unified_village/`. Periodic evaluation logs `eval/mean_reward` (and related fields) under `logs/bots_eval/` and `logs/village_eval/` when `training.eval_freq > 0` (default `10000` **environment timesteps** between evals; internally scaled by `n_envs` per Stable-Baselines3). The unified config sets `eval_freq: 0` by default (no separate eval pass yet). Tune with `training.n_eval_episodes`.
+With `logging.use_tensorboard: true` (default) and `tensorboard` installed, stage 1 and 2 write training scalars under `logs/bots/` and `logs/village/`; stage 4 (MAPPO) under `logs/mappo_bots/`; unified training writes under `logs/unified_bots/` and `logs/unified_village/`. Periodic evaluation logs `eval/mean_reward` (and related fields) under `logs/bots_eval/` and `logs/village_eval/` when `training.eval_freq > 0` (default `10000` **environment timesteps** between evals; internally scaled by `n_envs` per Stable-Baselines3). The unified config sets `eval_freq: 0` by default (no separate eval pass yet). Tune with `training.n_eval_episodes`.
 
 ```bash
 tensorboard --logdir logs/
@@ -129,7 +156,8 @@ python scripts/evaluate.py
 | Path | Contents |
 |------|-----------|
 | `checkpoints/bots/bot_final.zip` | Stage 1 policy (best eval mean reward when `training.eval_freq > 0`, else last iteration) |
-| `checkpoints/pool/bots/*.zip` | Historical bot policies for self-play |
+| `checkpoints/bots_mappo/mappo_bot_final.zip` | Stage 4 MAPPO policy (last save after all self-play iterations) |
+| `checkpoints/pool/bots/*.zip` | Historical bot policies for self-play (includes `mappo_bot_iter*.zip` when using stage 4) |
 | `checkpoints/village/village_final.zip` | Stage 2 manager (same best-vs-last rule as bots) |
 | `checkpoints/pool/village/*.zip` | Historical village policies for self-play |
 | `checkpoints/joint/joint_final.zip` | Stage 3 output |
@@ -140,10 +168,13 @@ python scripts/evaluate.py
 
 ## Project layout (RL baseline)
 
-- [`src/village_ai_war/env/game_env.py`](src/village_ai_war/env/game_env.py) — `step`, `step_with_opponent`, `step_village_only`, optional `game.bot_rl_checkpoint` / `training.bot_checkpoint` for frozen bot PPO
+- [`src/village_ai_war/env/game_env.py`](src/village_ai_war/env/game_env.py) — `step`, `step_with_opponent`, `step_village_only`, `queue_bot_action`, `_simulation_tick` (MAPPO tick path), optional `game.bot_rl_checkpoint` / `training.bot_checkpoint` for frozen bot PPO
+- [`src/village_ai_war/agents/village_obs_builder.py`](src/village_ai_war/agents/village_obs_builder.py) — `build_map`, `build_village_vec` (global critic / MAPPO)
 - [`src/village_ai_war/models/role_conditioned_policy.py`](src/village_ai_war/models/role_conditioned_policy.py)
+- [`src/village_ai_war/models/mappo_actor.py`](src/village_ai_war/models/mappo_actor.py), [`mappo_critic.py`](src/village_ai_war/models/mappo_critic.py), [`mappo_policy.py`](src/village_ai_war/models/mappo_policy.py), [`mappo_layout.py`](src/village_ai_war/models/mappo_layout.py)
 - [`src/village_ai_war/training/self_play_env.py`](src/village_ai_war/training/self_play_env.py) — `SelfPlayBotEnv`, `SelfPlayVillageEnv`, `UnifiedBotSelfPlayEnv`
-- [`src/village_ai_war/training/train_bots_selfplay.py`](src/village_ai_war/training/train_bots_selfplay.py), [`train_village_selfplay.py`](src/village_ai_war/training/train_village_selfplay.py), [`train_joint.py`](src/village_ai_war/training/train_joint.py), [`train_unified.py`](src/village_ai_war/training/train_unified.py), [`tensorboard_plots.py`](src/village_ai_war/training/tensorboard_plots.py), [`plot_tensorboard_scalars.py`](scripts/plot_tensorboard_scalars.py)
+- [`src/village_ai_war/training/mappo_env.py`](src/village_ai_war/training/mappo_env.py) — `MAPPOBotEnv`; [`global_state_callback.py`](src/village_ai_war/training/global_state_callback.py) (optional diagnostics from `info`)
+- [`src/village_ai_war/training/train_bots_selfplay.py`](src/village_ai_war/training/train_bots_selfplay.py), [`train_mappo_bots.py`](src/village_ai_war/training/train_mappo_bots.py), [`train_village_selfplay.py`](src/village_ai_war/training/train_village_selfplay.py), [`train_joint.py`](src/village_ai_war/training/train_joint.py), [`train_unified.py`](src/village_ai_war/training/train_unified.py), [`tensorboard_plots.py`](src/village_ai_war/training/tensorboard_plots.py), [`plot_tensorboard_scalars.py`](scripts/plot_tensorboard_scalars.py)
 
 Legacy trainers [`train_bots.py`](src/village_ai_war/training/train_bots.py) and [`train_village.py`](src/village_ai_war/training/train_village.py) are not used by [`scripts/run_training.py`](scripts/run_training.py).
 
@@ -154,7 +185,8 @@ Legacy trainers [`train_bots.py`](src/village_ai_war/training/train_bots.py) and
 - [x] Economy / combat / building systems
 - [x] Observation builders and action masker
 - [x] GameEnv (Gymnasium), no bot heuristics
-- [x] Role-conditioned bot policy + PPO self-play (stage 1)
+- [x] Role-conditioned bot policy + PPO self-play (stage 1, Baseline v0)
+- [x] MAPPO bot baseline — centralized critic, concat global obs, stage 4 (`train_mappo_bots`)
 - [x] Village MaskablePPO self-play with RL bots (stage 2)
 - [x] Joint fine-tuning with RL bots (stage 3)
 - [x] Unified training loop (alternating bot PPO + village MaskablePPO)

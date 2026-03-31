@@ -75,6 +75,7 @@ class GameEnv(gym.Env):
         self._tick_food_by_bot: dict[int, int] = {}
         self._tick_builder_repair_pct: dict[int, float] = {}
         self._shaping_snapshot: dict[str, Any] = {}
+        self._melee_intents: list[tuple[int, int, tuple[int, int]]] = []
 
         n = int(config["map"]["size"])
         max_bots = int(config["game"].get("max_bots_for_role_change", 32))
@@ -102,6 +103,15 @@ class GameEnv(gym.Env):
             )
         else:
             raise ValueError(f"Unknown mode {mode}")
+
+    @property
+    def game_state(self) -> GameState | None:
+        """Current simulation state (``None`` before ``reset``)."""
+        return self._state
+
+    def begin_mappo_tick(self) -> None:
+        """Clear pending melee intents before MAPPO queues bot actions for one simulation tick."""
+        self._melee_intents.clear()
 
     def reset(
         self,
@@ -176,6 +186,21 @@ class GameEnv(gym.Env):
             learner_bot_action=learner_bot_action,
         )
 
+    def _simulation_tick(
+        self,
+        *,
+        manager_action: dict[str, Any] | None,
+        learner_bot_action: int | None,
+    ) -> tuple[Any, float, bool, bool, dict[str, Any]]:
+        """Run combat/economy/buildings after bot actions queued via :meth:`queue_bot_action`."""
+        out = self._run_simulation_phase(
+            self._melee_intents,
+            manager_action=manager_action,
+            learner_bot_action=learner_bot_action,
+        )
+        self._melee_intents.clear()
+        return out
+
     def step_with_opponent(
         self,
         red_action: int,
@@ -202,6 +227,10 @@ class GameEnv(gym.Env):
             manager_action=None,
             learner_bot_action=int(red_action),
         )
+
+    def queue_bot_action(self, team: int, bot_id: int, action: int) -> None:
+        """Queue one bot action; melee intent goes to the instance buffer (MAPPO tick)."""
+        self._apply_bot_action_to_list(team, bot_id, int(action), self._melee_intents)
 
     def step_village_only(
         self,
@@ -363,8 +392,15 @@ class GameEnv(gym.Env):
         except Exception as e:  # noqa: BLE001
             logger.warning("Failed to load bot policy from {}: {}", path, e)
 
-    def _get_single_bot_obs(self, bot_id: int) -> np.ndarray:
+    def _get_single_bot_obs(self, bot_id: int, team: int | None = None) -> np.ndarray:
         assert self._state is not None
+        if team is not None:
+            bot = next(
+                (b for b in self._state.villages[team].bots if b.bot_id == bot_id),
+                None,
+            )
+            if bot is None:
+                return np.zeros((BotObsBuilder.OBS_DIM,), dtype=np.float32)
         return self._bot_obs.build(self._state, bot_id, self.config)
 
     def _get_bot_obs(self, team: int) -> np.ndarray | None:
@@ -420,6 +456,19 @@ class GameEnv(gym.Env):
         manager_action: dict[str, Any] | None,
         learner_bot_action: int | None,
     ) -> tuple[Any, float, bool, bool, dict[str, Any]]:
+        return self._run_simulation_phase(
+            melee_intents,
+            manager_action=manager_action,
+            learner_bot_action=learner_bot_action,
+        )
+
+    def _run_simulation_phase(
+        self,
+        melee_intents: list[tuple[int, int, tuple[int, int]]],
+        *,
+        manager_action: dict[str, Any] | None,
+        learner_bot_action: int | None,
+    ) -> tuple[Any, float, bool, bool, dict[str, Any]]:
         assert self._state is not None
         state = self._state
         terminated = False
@@ -427,7 +476,7 @@ class GameEnv(gym.Env):
 
         self._shaping_snapshot = GameEnv._build_shaping_snapshot(state)
 
-        cmb = CombatSystem.apply_melee_intents(state, self.config, melee_intents)
+        cmb = CombatSystem.apply_melee_intents(state, self.config, list(melee_intents))
         eco = EconomySystem.step(state, self.config)
         bld = BuildingSystem.construction_tick(state, self.config)
         tw = CombatSystem.apply_tower_fire(state, self.config)
@@ -574,6 +623,15 @@ class GameEnv(gym.Env):
             village.ticks_without_progress = 0
 
     def _apply_bot_action(
+        self,
+        team: int,
+        bot_id: int,
+        action: int,
+        melee_intents: list[tuple[int, int, tuple[int, int]]],
+    ) -> None:
+        self._apply_bot_action_to_list(team, bot_id, action, melee_intents)
+
+    def _apply_bot_action_to_list(
         self,
         team: int,
         bot_id: int,

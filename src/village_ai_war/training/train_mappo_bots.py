@@ -1,0 +1,124 @@
+"""Stage 4 (MAPPO): decentralized actor + centralized critic, bot self-play pool."""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from typing import Any
+
+from loguru import logger
+from omegaconf import OmegaConf
+from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
+
+from village_ai_war.models.mappo_policy import MAPPOPolicy
+from village_ai_war.training.mappo_env import MAPPOBotEnv
+from village_ai_war.training.pool_manager import PoolManager
+
+
+def _flat_cfg(cfg: Any) -> dict[str, Any]:
+    if OmegaConf.is_config(cfg):
+        return OmegaConf.to_container(cfg, resolve=True)  # type: ignore[return-value]
+    return dict(cfg)
+
+
+def _tensorboard_log_dir(flat: dict[str, Any], tcfg: dict[str, Any], subdir: str) -> str | None:
+    if not bool(flat.get("logging", {}).get("use_tensorboard", True)):
+        return None
+    if importlib.util.find_spec("tensorboard") is None:
+        logger.warning(
+            "logging.use_tensorboard is true but tensorboard is not installed; "
+            "training without tensorboard_log"
+        )
+        return None
+    return str(Path(tcfg["log_dir"]) / subdir)
+
+
+def run_mappo_bots_training(cfg: Any) -> None:
+    """MAPPO (PPO + centralized critic) with growing opponent checkpoint pool."""
+    flat = _flat_cfg(cfg)
+    tcfg = flat["training"]
+    pool_dir = Path(tcfg["pool_dir"]) / "bots"
+    pool_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir = Path(tcfg["checkpoint_dir"]) / "bots_mappo"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    pool_manager = PoolManager(pool_dir, max_size=int(tcfg.get("pool_max_size", 15)))
+
+    n = int(flat["map"]["size"])
+
+    n_envs = int(tcfg["n_envs"])
+    total = int(tcfg["total_timesteps"])
+    iterations = int(tcfg.get("selfplay_iterations", 1))
+    steps_per_iter = max(total // max(iterations, 1), n_envs)
+
+    def make_env(_rank: int) -> Any:
+        def _init() -> MAPPOBotEnv:
+            return MAPPOBotEnv(
+                flat,
+                team=0,
+                opponent_pool_dir=str(pool_dir),
+                opponent_sampling=str(tcfg.get("opponent_sampling", "uniform")),
+            )
+
+        return _init
+
+    use_subproc = n_envs > 1
+    vec_env: DummyVecEnv | SubprocVecEnv = (
+        SubprocVecEnv([make_env(i) for i in range(n_envs)])
+        if use_subproc
+        else DummyVecEnv([make_env(0)])
+    )
+    vec_env = VecMonitor(vec_env)
+
+    gae_lambda = float(tcfg.get("gae_lambda", 0.95))
+    clip_range = float(tcfg.get("clip_range", 0.2))
+    ent_coef = float(tcfg.get("ent_coef", 0.01))
+    vf_coef = float(tcfg.get("vf_coef", 0.5))
+    critic_h = int(tcfg.get("critic_hidden_dim", 256))
+
+    tb_log = _tensorboard_log_dir(flat, tcfg, "mappo_bots")
+
+    model = PPO(
+        MAPPOPolicy,
+        vec_env,
+        verbose=1,
+        learning_rate=float(tcfg["learning_rate"]),
+        n_steps=int(tcfg.get("n_steps", 512)),
+        batch_size=int(tcfg["batch_size"]),
+        n_epochs=int(tcfg["n_epochs"]),
+        gamma=float(tcfg["gamma"]),
+        gae_lambda=gae_lambda,
+        clip_range=clip_range,
+        ent_coef=ent_coef,
+        vf_coef=vf_coef,
+        tensorboard_log=tb_log,
+        policy_kwargs={
+            "map_size": n,
+            "critic_hidden_dim": critic_h,
+        },
+    )
+
+    save_freq = max(int(tcfg.get("checkpoint_interval", 100_000)) // max(n_envs, 1), 1)
+
+    for iteration in range(iterations):
+        logger.info("MAPPO self-play iteration {} / {}", iteration + 1, iterations)
+        checkpoint_callback = CheckpointCallback(
+            save_freq=save_freq,
+            save_path=str(checkpoint_dir),
+            name_prefix=f"mappo_bot_iter{iteration}",
+        )
+        model.learn(
+            total_timesteps=steps_per_iter,
+            callback=checkpoint_callback,
+            reset_num_timesteps=(iteration == 0),
+            tb_log_name="mappo_bot_selfplay",
+        )
+        stem = pool_dir / f"mappo_bot_iter{iteration}"
+        model.save(str(stem))
+        pool_manager.add(Path(str(stem) + ".zip"))
+
+    model.save(str(checkpoint_dir / "mappo_bot_final"))
+    logger.info("Saved MAPPO policy to {}.zip", checkpoint_dir / "mappo_bot_final")
+
+    vec_env.close()

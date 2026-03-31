@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch training stages via Hydra (``training.stage`` 0 unified, 1–3 legacy)."""
+"""Launch training stages via Hydra (``training.stage``: 0 unified, 1–3 legacy, 4 MAPPO bots)."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from village_ai_war.training.train_bots_selfplay import run_bots_selfplay_training
 from village_ai_war.training.train_joint import run_joint_training
+from village_ai_war.training.train_mappo_bots import run_mappo_bots_training
 from village_ai_war.training.train_unified import run_unified_training
 from village_ai_war.training.train_village_selfplay import run_village_selfplay_training
 
@@ -68,6 +69,8 @@ def main(cfg: DictConfig) -> None:
         run_village_selfplay_training(cfg)
     elif stage == 3:
         run_joint_training(cfg)
+    elif stage == 4:
+        run_mappo_bots_training(cfg)
     else:
         raise ValueError(f"Unknown training.stage={stage}")
 
