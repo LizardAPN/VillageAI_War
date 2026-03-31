@@ -183,7 +183,13 @@ class PygameRenderer:
     def _grid_px(self) -> tuple[int, int]:
         return self._cell * self._n, self._cell * self._n
 
-    def render(self, state: GameState, mode: str) -> np.ndarray | None:
+    def render(
+        self,
+        state: GameState,
+        mode: str,
+        *,
+        overlay_lines: tuple[str, ...] | list[str] | None = None,
+    ) -> np.ndarray | None:
         """Blit world; return RGB array when ``mode == \"rgb_array\"`` (map only)."""
         pygame = self._pygame
         gw, gh = self._grid_px()
@@ -194,7 +200,7 @@ class PygameRenderer:
         self._draw_map_grid(self._surface, state)
 
         if mode == "human":
-            self._render_human_window(state, gw, gh)
+            self._render_human_window(state, gw, gh, overlay_lines=overlay_lines or ())
             return None
 
         rgb = pygame.surfarray.array3d(self._surface)
@@ -341,7 +347,14 @@ class PygameRenderer:
                         surf.blit(to, (bx + ox, by + oy))
                     surf.blit(t, (bx, by))
 
-    def _render_human_window(self, state: GameState, gw: int, gh: int) -> None:
+    def _render_human_window(
+        self,
+        state: GameState,
+        gw: int,
+        gh: int,
+        *,
+        overlay_lines: tuple[str, ...] = (),
+    ) -> None:
         pygame = self._pygame
         self._ensure_ui_fonts()
         map_block_h = _MARGIN_TOP + gh
@@ -376,10 +389,38 @@ class PygameRenderer:
 
         self._draw_coordinate_axes(screen, ox, oy, gw, gh)
         self._draw_legend_panel(screen, legend_x, _TITLE_BAR, _LEGEND_WIDTH, content_h)
+        if overlay_lines:
+            self._draw_overlay_lines(screen, legend_x + 8, _TITLE_BAR + 420, overlay_lines)
         self._draw_bottom_hud(screen, state, 0, _TITLE_BAR + content_h, win_w)
         pygame.display.flip()
         pygame.event.pump()
         pygame.time.delay(int(1000 / max(int(self._config["rendering"]["fps"]), 1)))
+
+    def _draw_overlay_lines(
+        self,
+        screen: Any,
+        x: int,
+        y0: int,
+        lines: tuple[str, ...],
+    ) -> None:
+        pygame = self._pygame
+        small = self._font_ui_small
+        yy = y0
+        panel_w = _LEGEND_WIDTH - 16
+        line_h = 16
+        h = min(len(lines) * line_h + 8, 140)
+        if y0 + h > screen.get_height() - _BOTTOM_HUD_HEIGHT - 8:
+            yy = max(_TITLE_BAR + 8, screen.get_height() - _BOTTOM_HUD_HEIGHT - h - 8)
+        rect = pygame.Rect(x, yy, panel_w, h)
+        s = pygame.Surface((rect.width, rect.height))
+        s.set_alpha(230)
+        s.fill((18, 22, 32))
+        screen.blit(s, rect.topleft)
+        pygame.draw.rect(screen, _ACCENT, rect, 1)
+        ty = yy + 4
+        for line in lines[:8]:
+            screen.blit(small.render(line[:72], True, (230, 232, 240)), (x + 6, ty))
+            ty += line_h
 
     def _draw_coordinate_axes(self, screen: Any, ox: int, oy: int, gw: int, gh: int) -> None:
         pygame = self._pygame

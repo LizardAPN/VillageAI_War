@@ -18,7 +18,12 @@ from stable_baselines3 import PPO
 
 from village_ai_war.agents.village_obs_builder import VillageObsBuilder
 from village_ai_war.env.game_env import GameEnv
-from village_ai_war.models.mappo_layout import mappo_obs_dim, pack_mappo_obs_slots
+from village_ai_war.models.mappo_layout import mappo_obs_dim
+from village_ai_war.play.mappo_obs import (
+    build_mappo_global_state,
+    build_mappo_locals_matrix,
+    pack_mappo_observation_vector,
+)
 from village_ai_war.state.game_state import GameState
 
 
@@ -143,26 +148,19 @@ class MAPPOBotEnv(gym.Env):
 
     def _global_state(self, state: GameState) -> dict[str, np.ndarray]:
         """Canonical team-0 map POV plus both village vectors (for critic and logging)."""
-        mp = self.village_obs_builder.build_map(state, team=0)
-        v0 = self.village_obs_builder.build_village_vec(state, team=0)
-        v1 = self.village_obs_builder.build_village_vec(state, team=1)
-        return {"map": mp, "village": np.concatenate([v0, v1], axis=0).astype(np.float32)}
+        return build_mappo_global_state(state, self.village_obs_builder)
 
     def _locals_matrix(self, state: GameState) -> np.ndarray:
         """K x local_dim; alive bots sorted by bot_id fill low rows, then zeros."""
-        k = self._n_bot_slots
-        d = self._local_dim
-        out = np.zeros((k, d), dtype=np.float32)
-        village = state.villages[self.team]
-        alive = sorted((b for b in village.bots if b.is_alive), key=lambda b: int(b.bot_id))
-        for i, bot in enumerate(alive[:k]):
-            out[i] = self.inner._get_single_bot_obs(bot.bot_id, self.team)
-        return out
+        return build_mappo_locals_matrix(
+            state,
+            self.inner,
+            mappo_team=self.team,
+            n_bot_slots=self._n_bot_slots,
+        )
 
     def _pack_slots(self, locals_k: np.ndarray, gs: dict[str, np.ndarray]) -> np.ndarray:
-        return pack_mappo_obs_slots(
-            locals_k, gs["map"], gs["village"][:20], gs["village"][20:]
-        )
+        return pack_mappo_observation_vector(locals_k, gs)
 
     def _get_global_from_state(self) -> dict[str, np.ndarray]:
         st = self.inner.game_state

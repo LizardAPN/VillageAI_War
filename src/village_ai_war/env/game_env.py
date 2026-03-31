@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, SupportsFloat, cast
 
@@ -277,6 +277,9 @@ class GameEnv(gym.Env):
         bot_policy: Any,
         red_village_action: int,
         blue_village_action: int,
+        *,
+        human_team: int | None = None,
+        human_bot_actions: Mapping[int, int] | None = None,
     ) -> tuple[Any, float, bool, bool, dict[str, Any]]:
         """Run one tick: all bots act, then both managers' village actions are applied.
 
@@ -287,15 +290,37 @@ class GameEnv(gym.Env):
             bot_policy: Frozen PPO for bots, or ``None`` for random discrete actions.
             red_village_action: Flattened village action index for team 0.
             blue_village_action: Flattened village action index for team 1.
+            human_team: If set with ``human_bot_actions``, that team's alive bots use
+                the given actions first; policy fills other bots (excluding those pairs).
 
         Raises:
-            ValueError: If ``mode`` is not ``village`` or ``full``.
+            ValueError: If ``mode`` is not ``village`` or ``full``, or human actions
+                omit an alive bot on ``human_team``.
         """
         if self.mode not in ("village", "full"):
             raise ValueError("run_bots_then_village_decisions requires mode='village' or 'full'")
         self.snapshot_bot_positions_for_tick()
         melee_intents: list[tuple[int, int, tuple[int, int]]] = []
-        self._step_all_bots_with_policy(bot_policy, melee_intents, exclude=None)
+        ex: frozenset[tuple[int, int]] | None = None
+        if human_team is not None and human_bot_actions is not None:
+            alive_ids = sorted(
+                int(b.bot_id) for b in self._state.villages[int(human_team)].bots if b.is_alive
+            )
+            missing = [bid for bid in alive_ids if bid not in human_bot_actions]
+            if missing:
+                raise ValueError(
+                    f"human_bot_actions must cover all alive bots on team {human_team}; "
+                    f"missing bot_id(s): {missing}"
+                )
+            for bid in alive_ids:
+                self._apply_bot_action(
+                    int(human_team),
+                    bid,
+                    int(human_bot_actions[bid]),
+                    melee_intents,
+                )
+            ex = frozenset((int(human_team), bid) for bid in alive_ids)
+        self._step_all_bots_with_policy(bot_policy, melee_intents, exclude=ex)
         return self.step_village_only(
             int(red_village_action), int(blue_village_action), melee_intents
         )
@@ -313,7 +338,7 @@ class GameEnv(gym.Env):
             m[self._village_space.offset_noop] = True
         return m
 
-    def render(self) -> np.ndarray | None:
+    def render(self, *, overlay_lines: Sequence[str] | None = None) -> np.ndarray | None:
         if self.render_mode is None:
             return None
         mode = cast(str, self.render_mode)
@@ -335,7 +360,7 @@ class GameEnv(gym.Env):
 
         if self._renderer is None:
             self._renderer = PygameRenderer(self.config, self._state)
-        return self._renderer.render(self._state, mode=mode)
+        return self._renderer.render(self._state, mode=mode, overlay_lines=overlay_lines)
 
     def close(self) -> None:
         if self._renderer is not None:

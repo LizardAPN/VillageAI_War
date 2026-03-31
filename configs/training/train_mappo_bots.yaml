@@ -8,7 +8,7 @@ training:
   selfplay_iterations: 30
   n_envs: 8
   n_steps: 512
-  learning_rate: 3.0e-4
+  learning_rate: 3.0e-3
   batch_size: 256
   n_epochs: 10
   gamma: 0.99
@@ -29,7 +29,7 @@ training:
   log_dir: logs
 
 game:
-  initial_bots: 4
+  initial_bots: 8
 
 logging:
   use_tensorboard: true

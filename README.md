@@ -52,6 +52,26 @@ python scripts/run_game.py \
   --deterministic --seed 42
 ```
 
+### Human vs AI
+
+**Against a trained MAPPO policy (micro only, matches `MAPPOBotEnv` training):** you play **BLUE**; **RED** bots are controlled by a `MAPPOPolicy` checkpoint. There is **no** village manager phase in this mode (same as stage-4 bot training). Requires a **2D pygame** window.
+
+```bash
+python scripts/run_game.py \
+  --mappo-opponent checkpoints/bots_mappo/mappo_bot_final.zip \
+  --seed 0 --max-steps 500
+```
+
+The checkpoint must match your config (`map.size`, `game.max_bots_for_role_change`). `--human red` is rejected (MAPPO is trained as team 0 with a fixed observation layout).
+
+**Against MaskablePPO (village) + 181-dim PPO (bots):** use `--human red` or `--human blue`. Each tick you choose actions for **all** alive bots on your team, then (on manager ticks) a village action via `[` / `]` and Enter. The other side uses loaded checkpoints or random valid actions. Human play is **2D only** (`--human-3d` is ignored).
+
+```bash
+python scripts/run_game.py --human blue \
+  --village-checkpoint checkpoints/village/village_final.zip \
+  --bot-checkpoint checkpoints/bots/bot_final.zip
+```
+
 When any village, opponent, or bot checkpoint is loaded (or you pass a path that exists), the viewer runs **both** village managers each tick (trained or random per side), then resolves the tick in the same order as self-play training (`run_bots_then_village_decisions` in [`GameEnv`](src/village_ai_war/env/game_env.py)). If **no** checkpoints load, behavior matches the legacy script: one random manager action per step for team 0 only.
 
 The pygame **human** window includes numeric **row/column axes**, a **legend** (terrain colors, harvest hints `w`/`s`/`f`, unit roles and team rings, building abbreviations), and a **bottom HUD** (tick, winner, resources, population, global mode per team). `rgb_array` mode is still the raw map only for headless frames.

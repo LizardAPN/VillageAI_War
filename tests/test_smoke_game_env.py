@@ -149,6 +149,30 @@ def test_mutual_extinction_terminates_episode() -> None:
     assert info.get("winner") is None
 
 
+def test_run_bots_then_village_human_team_excludes_policy() -> None:
+    env = GameEnv(_tiny_config(), mode="village", team=0, render_mode=None)
+    env.reset(seed=7)
+    st = env.game_state
+    assert st is not None
+    blue_alive = [b for b in st.villages[1].bots if b.is_alive]
+    assert blue_alive
+    human_act = {int(b.bot_id): 0 for b in blue_alive}
+    m0 = env.action_masks(team=0)
+    m1 = env.action_masks(team=1)
+    a0 = int(np.flatnonzero(m0)[0])
+    a1 = int(np.flatnonzero(m1)[0])
+    _obs, _r, _t, _tr, _info = env.run_bots_then_village_decisions(
+        None,
+        a0,
+        a1,
+        human_team=1,
+        human_bot_actions=human_act,
+    )
+    with pytest.raises(ValueError, match="human_bot_actions"):
+        env.run_bots_then_village_decisions(None, a0, a1, human_team=1, human_bot_actions={})
+    env.close()
+
+
 def test_get_village_observation_and_run_bots_then_village() -> None:
     env = GameEnv(_tiny_config(), mode="village", team=0, render_mode=None)
     env.reset(seed=3)

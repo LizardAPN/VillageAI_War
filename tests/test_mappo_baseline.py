@@ -26,6 +26,12 @@ from village_ai_war.models.mappo_layout import (
     pack_mappo_obs_slots,
 )
 from village_ai_war.models.mappo_policy import MAPPOPolicy
+from village_ai_war.play.mappo_obs import (
+    build_mappo_global_state,
+    build_mappo_locals_matrix,
+    pack_mappo_observation_vector,
+)
+from village_ai_war.play.mappo_human_tick import play_mappo_human_tick
 from village_ai_war.training.mappo_env import MAPPOBotEnv
 
 
@@ -217,6 +223,60 @@ def test_mappo_bot_env_and_policy(tmp_path: Path) -> None:
     act, _ = model.predict(obs, deterministic=True)
     assert act.shape == (1, k)
     venv.close()
+
+
+def test_mappo_obs_helpers_match_mapppo_env(tmp_path: Path) -> None:
+    cfg = _tiny()
+    k = int(cfg["game"]["max_bots_for_role_change"])
+    pool = tmp_path / "pool_mappo_obs"
+    env = MAPPOBotEnv(cfg, team=0, opponent_pool_dir=str(pool))
+    obs, _info = env.reset(seed=42)
+    st = env.inner.game_state
+    assert st is not None
+    gs = build_mappo_global_state(st, env.village_obs_builder)
+    mat = build_mappo_locals_matrix(st, env.inner, mappo_team=0, n_bot_slots=k)
+    packed = pack_mappo_observation_vector(mat, gs)
+    np.testing.assert_allclose(packed, obs, rtol=0, atol=0)
+    env.close()
+
+
+def test_play_mappo_human_tick_smoke(tmp_path: Path) -> None:
+    cfg = _tiny()
+    k = int(cfg["game"]["max_bots_for_role_change"])
+    pool = tmp_path / "pool"
+    pool.mkdir()
+    venv = DummyVecEnv([lambda: MAPPOBotEnv(cfg, opponent_pool_dir=str(pool))])
+    model = PPO(
+        MAPPOPolicy,
+        venv,
+        n_steps=64,
+        batch_size=32,
+        verbose=0,
+        policy_kwargs={"map_size": 12, "critic_hidden_dim": 64, "n_bot_slots": k},
+    )
+    save_p = tmp_path / "mappo_test"
+    model.save(str(save_p))
+    venv.close()
+
+    loaded = PPO.load(
+        str(save_p.with_suffix(".zip")),
+        device="cpu",
+        custom_objects={"lr_schedule": lambda _: 0.0, "clip_range": lambda _: 0.0},
+    )
+    ge = GameEnv(cfg, mode="bot", team=0, render_mode=None)
+    ge.reset(seed=42)
+    st = ge.game_state
+    assert st is not None
+    blue = [b for b in st.villages[1].bots if b.is_alive]
+    human = {int(b.bot_id): 0 for b in blue}
+    _o, _r, _t, _tr, _info = play_mappo_human_tick(
+        ge,
+        loaded,
+        human,
+        n_bot_slots=k,
+        deterministic=True,
+    )
+    ge.close()
 
 
 def test_pack_mappo_obs_roundtrip_dims() -> None:
