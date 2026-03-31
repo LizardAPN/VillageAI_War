@@ -1,8 +1,8 @@
 # @package _global_
 economy:
-  harvest_interval: 3
-  harvest_amount: 10
-  food_consumption: 1
+  harvest_interval: 2
+  harvest_amount: 14
+  food_consumption: 0.5
   hunger_damage: 5
   bot_cost:
     wood: 30

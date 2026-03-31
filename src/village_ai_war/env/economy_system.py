@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping
 
 import numpy as np
@@ -32,7 +33,7 @@ class EconomySystem:
 
         harvest_interval = int(ecfg["harvest_interval"])
         harvest_amount = int(ecfg["harvest_amount"])
-        food_per_bot = int(ecfg["food_consumption"])
+        food_per_bot = float(ecfg["food_consumption"])
         hunger_damage = int(ecfg["hunger_damage"])
         spawn_delay = int(ecfg["bot_spawn_delay"])
         bot_cost_wood = int(ecfg["bot_cost"]["wood"])
@@ -105,7 +106,7 @@ class EconomySystem:
                     add_resource_bot(bot.bot_id, prod)
 
             alive = [b for b in village.bots if b.is_alive]
-            need = food_per_bot * len(alive)
+            need = max(0, int(math.ceil(food_per_bot * len(alive))))
             if village.resources.food >= need:
                 village.resources.food -= need
                 events["food_delta"][team] -= need
