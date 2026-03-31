@@ -285,14 +285,61 @@ class PygameRenderer:
                 cy = by * cell + cell // 2
                 r = max(cell // 4, 4)
                 role_col = _ROLE_FILL.get(bot.role, (200, 200, 200))
-                pygame.draw.circle(surf, (18, 20, 26), (cx + 1, cy + 2), r + 1)
-                pygame.draw.circle(surf, role_col, (cx, cy), r)
-                pygame.draw.circle(surf, team_dark(v.team), (cx, cy), r, 2)
-                pygame.draw.circle(surf, _lerp_rgb(role_col, (255, 255, 255), 0.4), (cx, cy), r, 1)
+                team_col = _TEAM_FILL[v.team] if v.team < len(_TEAM_FILL) else (160, 160, 160)
+                skin = (228, 198, 168)
+                head_r = max(3, int(r * 0.44))
+                body_w = max(6, int(r * 1.65))
+                body_h = max(5, int(r * 1.05))
+                foot_y = cy + max(2, r // 3)
+                body = pygame.Rect(cx - body_w // 2, foot_y - body_h, body_w, body_h)
+                hc_y = foot_y - body_h - head_r - 1
+                frac = bot.hp / max(bot.max_hp, 1)
+                bar_w = min(cell - 4, max(body_w + 4, 18))
+                bar_h = max(3, min(5, cell // 6))
+                bar_y = hc_y - head_r - bar_h - 3
+                bar_x = cx - bar_w // 2
+                pygame.draw.rect(surf, _HP_BG, pygame.Rect(bar_x, bar_y, bar_w, bar_h))
+                hp_color = _HP_OK if frac > 0.35 else _HP_LOW
+                pygame.draw.rect(
+                    surf,
+                    hp_color,
+                    pygame.Rect(bar_x, bar_y, max(0, int(bar_w * frac)), bar_h),
+                )
+                pygame.draw.rect(surf, (0, 0, 0), pygame.Rect(bar_x, bar_y, bar_w, bar_h), 1)
+                if self._font_hint is not None and bar_w >= 14:
+                    hs = f"{bot.hp}"
+                    ht = self._font_hint.render(hs, True, (248, 250, 255))
+                    ho = self._font_hint.render(hs, True, (12, 14, 18))
+                    tx = cx - ht.get_width() // 2
+                    ty = bar_y + (bar_h - ht.get_height()) // 2
+                    for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                        surf.blit(ho, (tx + ox, ty + oy))
+                    surf.blit(ht, (tx, ty))
+                pygame.draw.ellipse(surf, (18, 20, 26), body.move(1, 2))
+                pygame.draw.ellipse(surf, team_col, body)
+                pygame.draw.ellipse(surf, team_dark(v.team), body, 2)
+                pygame.draw.ellipse(
+                    surf, _lerp_rgb(team_col, (255, 255, 255), 0.35), body, 1
+                )
+                pygame.draw.circle(surf, (14, 16, 20), (cx + 1, hc_y + 2), head_r + 1)
+                pygame.draw.circle(surf, skin, (cx, hc_y), head_r)
+                pygame.draw.circle(surf, team_dark(v.team), (cx, hc_y), head_r, 2)
+                hw = max(4, int(head_r * 1.9))
+                hh = max(3, int(head_r * 0.88))
+                helmet = pygame.Rect(cx - hw // 2, hc_y - head_r - 1, hw, hh)
+                pygame.draw.ellipse(surf, role_col, helmet)
+                pygame.draw.ellipse(
+                    surf, _lerp_rgb(role_col, (12, 14, 18), 0.5), helmet, 1
+                )
                 if self._font_role is not None:
                     rn = bot.role.name[:1]
-                    t = self._font_role.render(rn, True, (16, 18, 22))
-                    surf.blit(t, (cx - t.get_width() // 2, cy - t.get_height() // 2))
+                    t = self._font_role.render(rn, True, (248, 250, 255))
+                    to = self._font_role.render(rn, True, (16, 18, 22))
+                    bx = cx - t.get_width() // 2
+                    by = foot_y - body_h // 2 - t.get_height() // 2
+                    for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                        surf.blit(to, (bx + ox, by + oy))
+                    surf.blit(t, (bx, by))
 
     def _render_human_window(self, state: GameState, gw: int, gh: int) -> None:
         pygame = self._pygame
@@ -399,6 +446,7 @@ class PygameRenderer:
 
         screen.blit(small.render("UNITS", True, _ACCENT), (x + 12, cy))
         cy += line_h - 2
+        line("Swatch = role cap (torso = team)", muted, small)
         for role, name in (
             (Role.WARRIOR, "Warrior"),
             (Role.GATHERER, "Gatherer"),
@@ -410,7 +458,8 @@ class PygameRenderer:
             pygame.draw.circle(screen, (24, 26, 32), (x + 21, cy + 8), 7, 1)
             screen.blit(body.render(name, True, fg), (x + 36, cy))
             cy += line_h
-        line("Ring: team color (red / blue)", muted, small)
+        line("Torso = team; cap = role color", muted, small)
+        line("Bar above unit = HP (number = current)", muted, small)
         cy += 6
 
         screen.blit(small.render("BUILDINGS", True, _ACCENT), (x + 12, cy))

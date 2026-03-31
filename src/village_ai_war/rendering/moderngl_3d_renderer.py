@@ -39,7 +39,7 @@ _ROLE_RGB: dict[Role, tuple[float, float, float]] = {
 _LEGEND_WIDTH_PX = 268
 # Khronos GL_SCISSOR_TEST (moderngl.Context has no SCISSOR_TEST flag alias)
 _GL_SCISSOR_TEST = 0x0C11
-_LEGEND_HUD_HEIGHT = 102
+_LEGEND_HUD_HEIGHT_MIN = 102
 _TEAM_HUD_RGB = ((255, 130, 130), (150, 185, 255))
 _HUD_ROW_BG = (30, 33, 44)
 _ACCENT_HUD = (92, 140, 220)
@@ -407,6 +407,16 @@ def _mode_label_ru(m: GlobalRewardMode) -> str:
     }.get(m, "?")
 
 
+def _legend_hud_height_for_state(
+    _pygame: Any, _small: Any, _body: Any, _state: GameState, _legend_w: int
+) -> int:
+    """Высота нижней панели: тик + две строки команд (HP рисуется над юнитами на карте)."""
+    tick_block = 6 + 16 + 4
+    row_h = 32
+    gap = 3
+    return max(_LEGEND_HUD_HEIGHT_MIN, tick_block + 2 * (row_h + gap) + 10)
+
+
 def _ortho_pixel(win_w: float, win_h: float) -> np.ndarray:
     m = np.zeros((4, 4), dtype=np.float32)
     m[0, 0] = 2.0 / win_w
@@ -426,10 +436,11 @@ def _draw_legend_hud(
     w: int,
     h: int,
     state: GameState,
+    hud_h: int,
 ) -> None:
-    """Нижняя зона панели: тик, ресурсы и живые боты по командам."""
-    y0 = h - _LEGEND_HUD_HEIGHT
-    pygame.draw.rect(surf, (22, 24, 32), pygame.Rect(0, y0, w, _LEGEND_HUD_HEIGHT))
+    """Нижняя зона панели: тик и ресурсы по командам (HP — на модели юнита над клеткой)."""
+    y0 = h - hud_h
+    pygame.draw.rect(surf, (22, 24, 32), pygame.Rect(0, y0, w, hud_h))
     pygame.draw.line(surf, _ACCENT_HUD, (0, y0), (w, y0), 2)
 
     win = state.winner
@@ -453,13 +464,13 @@ def _draw_legend_hud(
         col = _TEAM_HUD_RGB[i] if i < 2 else (200, 200, 210)
         name = names[i] if i < len(names) else f"команда {v.team}"
         r = v.resources
-        alive = sum(1 for b in v.bots if b.is_alive)
+        alive_n = sum(1 for b in v.bots if b.is_alive)
         mode = _mode_label_ru(v.global_reward_mode)
         panel = pygame.Rect(6, yy, w - 12, row_h)
         pygame.draw.rect(surf, _HUD_ROW_BG, panel)
         pygame.draw.rect(surf, _lerp_rgb_int(col, (255, 255, 255), 0.65), panel, 1)
         pygame.draw.rect(surf, col, pygame.Rect(panel.left, panel.top, 3, panel.height))
-        line1 = f"{name}   боты {alive}/{v.pop_cap}   AI: {mode}"
+        line1 = f"{name}   боты {alive_n}/{v.pop_cap}   AI: {mode}"
         line2 = f"дер. {r.wood}   кам. {r.stone}   еда {r.food}"
         surf.blit(small.render(line1, True, col), (panel.left + 8, panel.top + 4))
         surf.blit(body.render(line2, True, (210, 212, 220)), (panel.left + 8, panel.top + 17))
@@ -522,6 +533,118 @@ def _add_building_variant(
     else:
         h = 0.35 + 0.45 * hp_f
         _add_cuboid(buf, wx, base_h + h * 0.5 + 0.02, wz, 0.72, h, 0.72, team)
+
+
+def _add_bot_figure(
+    buf: list[float],
+    wx: float,
+    base_h: float,
+    wz: float,
+    team_rgb: tuple[float, float, float],
+    role_rgb: tuple[float, float, float],
+    role: Role,
+) -> None:
+    """Силуэт: ноги и туловище — цвет команды; шлем и аксессуары роли — цвет роли."""
+    y = float(base_h)
+    tr, tg, tb = team_rgb
+    rr, rg, rb = role_rgb
+    leg_tint = (tr * 0.52 + 0.04, tg * 0.52 + 0.04, tb * 0.52 + 0.04)
+    torso = (min(tr * 1.05, 0.99), min(tg * 1.05, 0.99), min(tb * 1.05, 0.99))
+    arm_col = (tr * 0.78, tg * 0.78, tb * 0.78)
+
+    leg_h, leg_w = 0.13, 0.062
+    spread = 0.092
+    for sx in (-spread, spread):
+        _add_cuboid(
+            buf,
+            wx + sx,
+            y + leg_h * 0.5,
+            wz,
+            leg_w,
+            leg_h,
+            leg_w * 1.08,
+            leg_tint,
+        )
+    y += leg_h
+
+    tw, th, td = 0.24, 0.30, 0.13
+    ty = y + th * 0.5
+    _add_cuboid(buf, wx, ty, wz, tw, th, td, torso)
+
+    arm_y = y + th * 0.52
+    arm_l, aw, ad = 0.13, 0.052, 0.052
+    ox = tw * 0.5 + aw * 0.48
+    for sx in (-ox, ox):
+        _add_cuboid(buf, wx + sx, arm_y, wz + 0.018, aw, arm_l, ad, arm_col)
+
+    y += th
+    head_y = y + 0.095
+    skin = (0.91, 0.79, 0.64)
+    _add_sphere(buf, wx, head_y, wz, 0.092, skin, stacks=4, slices=8)
+    helm = (min(rr * 1.08, 0.98), min(rg * 1.08, 0.98), min(rb * 1.08, 0.98))
+    _add_cuboid(buf, wx, head_y + 0.105, wz, 0.15, 0.048, 0.15, helm)
+
+    if role == Role.WARRIOR:
+        blade = (0.75, 0.76, 0.82)
+        _add_cuboid(buf, wx + ox * 0.85, arm_y + 0.02, wz + 0.16, 0.035, 0.045, 0.20, blade)
+    elif role == Role.GATHERER:
+        bag = (rr * 0.42 + 0.32, rg * 0.38 + 0.28, rb * 0.32 + 0.22)
+        _add_cuboid(buf, wx - ox * 0.85, arm_y, wz + 0.12, 0.08, 0.06, 0.08, bag)
+    elif role == Role.FARMER:
+        hat = (min(rr * 0.72 + 0.2, 0.96), min(rg * 0.68 + 0.18, 0.92), min(rb * 0.35 + 0.12, 0.85))
+        _add_cylinder_y(
+            buf,
+            wx,
+            head_y + 0.14,
+            wz,
+            0.11,
+            0.04,
+            8,
+            hat,
+            cap_top=True,
+            cap_bottom=True,
+        )
+    elif role == Role.BUILDER:
+        brick = (rr * 0.45 + 0.35, rg * 0.42 + 0.33, rb * 0.4 + 0.32)
+        _add_cuboid(buf, wx - ox * 0.9, arm_y - 0.02, wz + 0.1, 0.05, 0.08, 0.05, brick)
+
+
+def _add_bot_hp_bar(
+    buf: list[float],
+    wx: float,
+    wz: float,
+    base_h: float,
+    hp_frac: float,
+) -> None:
+    """Полоска HP над головой: светлый трек + яркая заливка слоем выше (без z-fight с треком)."""
+    f = float(np.clip(hp_frac, 0.0, 1.0))
+    bar_w, bar_d = 0.46, 0.075
+    h_track = 0.048
+    h_fill = 0.024
+    # Центр трека — над шлемом/шляпой
+    cy_track = float(base_h) + 0.79
+    rim = (0.28, 0.30, 0.36)
+    track = (0.48, 0.50, 0.56)
+    _add_cuboid(
+        buf, wx, cy_track, wz, bar_w + 0.024, h_track + 0.012, bar_d + 0.018, rim
+    )
+    _add_cuboid(buf, wx, cy_track, wz, bar_w, h_track, bar_d, track)
+    if f <= 0.001:
+        return
+    margin = bar_w * 0.08
+    inner = bar_w - 2.0 * margin
+    fw = max(inner * f, 0.02)
+    left = wx - bar_w * 0.5 + margin
+    fx = left + fw * 0.5
+    if f > 0.35:
+        fill = (0.22, 0.98, 0.42)
+    elif f > 0.15:
+        fill = (1.0, 0.78, 0.18)
+    else:
+        fill = (1.0, 0.32, 0.28)
+    # Заливка целиком над верхней гранью трека — всегда видна при типичном свете (amb+dif)
+    cy_fill = cy_track + h_track * 0.5 + h_fill * 0.5 + 0.004
+    _add_cuboid(buf, fx, cy_fill, wz, fw, h_fill, bar_d * 0.88, fill)
 
 
 def _install_linux_gl_soname_patch() -> Any:
@@ -702,8 +825,9 @@ class Moderngl3DRenderer:
         title = self._f_leg_title
         body = self._f_leg_body
         small = self._f_leg_small
+        hud_h = _legend_hud_height_for_state(pygame, small, body, state, self._legend_w)
         y = 10
-        hud_top = self._win_h - _LEGEND_HUD_HEIGHT
+        hud_top = self._win_h - hud_h
 
         def bl(txt: str, dy: int, color: tuple[int, int, int], font: Any = body) -> None:
             nonlocal y
@@ -714,20 +838,20 @@ class Moderngl3DRenderer:
 
         bl("Легенда (3D)", 22, (245, 248, 255), title)
         bl("Боты", 16, (120, 170, 230), small)
-        bl("Низ — команда (диск)", 16, (200, 200, 210))
-        bl("Сфера — роль (W/G/F/B)", 16, (200, 200, 210))
-        bl("Кольцо — снова команда", 16, (200, 200, 210))
+        bl("Фигурки: тело — команда", 16, (200, 200, 210))
+        bl("шлем/убор — роль W/G/F/B", 16, (200, 200, 210))
+        bl("HP — полоска над юнитом", 16, (175, 205, 235))
         y += 4
         for i, label in enumerate(("RED (0)", "BLUE (1)")):
             if y > hud_top - 24:
                 break
             c = tuple(int(255 * x) for x in _TEAM_NEON[i])
-            pygame.draw.ellipse(surf, c, pygame.Rect(12, y, 22, 14))
-            pygame.draw.rect(surf, (60, 65, 80), pygame.Rect(12, y, 22, 14), 1)
-            surf.blit(body.render(label, True, (220, 222, 230)), (40, y - 1))
+            pygame.draw.rect(surf, c, pygame.Rect(12, y, 10, 14))
+            pygame.draw.rect(surf, (60, 65, 80), pygame.Rect(12, y, 10, 14), 1)
+            surf.blit(body.render(label, True, (220, 222, 230)), (28, y - 1))
             y += 20
         y += 6
-        bl("Роли (сфера)", 16, (120, 170, 230), small)
+        bl("Роли (цвет шлема)", 16, (120, 170, 230), small)
         for role, lab in (
             (Role.WARRIOR, "W  воин (оранж.)"),
             (Role.GATHERER, "G  сборщик"),
@@ -738,9 +862,9 @@ class Moderngl3DRenderer:
                 break
             rr, rg, rb = _ROLE_RGB[role]
             c = (int(rr * 255), int(rg * 255), int(rb * 255))
-            pygame.draw.circle(surf, c, (23, y + 7), 7)
-            pygame.draw.circle(surf, (40, 44, 55), (23, y + 7), 7, 1)
-            surf.blit(body.render(lab, True, (210, 212, 220)), (38, y))
+            pygame.draw.rect(surf, c, pygame.Rect(15, y + 1, 14, 12))
+            pygame.draw.rect(surf, (40, 44, 55), pygame.Rect(15, y + 1, 14, 12), 1)
+            surf.blit(body.render(lab, True, (210, 212, 220)), (34, y))
             y += 20
         y += 6
         bl("Ландшафт", 16, (120, 170, 230), small)
@@ -773,7 +897,7 @@ class Moderngl3DRenderer:
         bl("На карте: жёлтый маркер — ресурс", 16, (170, 175, 190), small)
 
         _draw_legend_hud(
-            surf, pygame, small, body, self._legend_w, self._win_h, state
+            surf, pygame, small, body, self._legend_w, self._win_h, state, hud_h
         )
         self._tex_legend.write(pygame.image.tobytes(surf, "RGBA"))
 
@@ -843,12 +967,9 @@ class Moderngl3DRenderer:
                 team_idx = v.team
                 tn = _TEAM_NEON[team_idx] if team_idx < 2 else (0.55, 0.55, 0.58)
                 rr, rg, rb = _ROLE_RGB.get(bot.role, (0.85, 0.85, 0.88))
-                pad = base_h
-                _add_cylinder_y(buf, wx, pad, wz, 0.33, 0.09, 12, tn, cap_top=True, cap_bottom=True)
-                body_y = pad + 0.09 + 0.15
-                _add_sphere(buf, wx, body_y, wz, 0.155, (rr, rg, rb), stacks=4, slices=8)
-                ring_y = pad + 0.09 + 0.13
-                _add_cylinder_y(buf, wx, ring_y, wz, 0.23, 0.04, 16, tn, cap_top=True, cap_bottom=True)
+                _add_bot_figure(buf, wx, base_h, wz, tn, (rr, rg, rb), bot.role)
+                hp_f = bot.hp / max(bot.max_hp, 1)
+                _add_bot_hp_bar(buf, wx, wz, base_h, hp_f)
 
         return np.asarray(buf, dtype=np.float32)
 
