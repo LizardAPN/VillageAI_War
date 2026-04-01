@@ -42,7 +42,8 @@ def run_mappo_bots_training(
     """MAPPO (PPO + centralized critic) with a rolling pool of past MAPPO snapshots.
 
     If ``return_metrics`` is True, returns ``win_frac``, ``win_townhall_frac`` (fraction of
-    episodes in the metrics window that are wins via ``townhall_destroyed``), and
+    episodes in the metrics window that are wins via ``townhall_destroyed``),
+    ``mean_episode_reward`` (mean of VecMonitor episode returns in the same window), and
     ``outcome_fractions`` from the episode metrics callback; otherwise returns ``None``.
     """
     flat = _flat_cfg(cfg)
@@ -142,6 +143,7 @@ def run_mappo_bots_training(
         return {
             "win_frac": float(fracs.get("win", 0.0)),
             "win_townhall_frac": float(metrics_cb.win_townhall_frac()),
+            "mean_episode_reward": float(metrics_cb.mean_episode_reward()),
             "outcome_fractions": fracs,
         }
     return None

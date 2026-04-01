@@ -94,6 +94,17 @@ def main() -> None:
         metavar="KEY=VALUE",
         help="Extra Hydra-style overrides (repeatable). Applied after trial suggestions.",
     )
+    parser.add_argument(
+        "--objective",
+        type=str,
+        default="ep_rew_mean",
+        choices=("ep_rew_mean", "win_townhall_frac", "win_frac"),
+        help=(
+            "Metric to maximize. Use one objective per Optuna study (storage); "
+            "do not mix objectives when load_if_exists. "
+            "ep_rew_mean: dense signal from mean episode return in the metrics window."
+        ),
+    )
     args = parser.parse_args()
 
     n_envs = int(args.n_envs)
@@ -111,9 +122,10 @@ def main() -> None:
     user_overrides: list[str] = list(args.override)
 
     logger.info(
-        "HPO search space uses rollout={}, gamma_gae presets={}, "
+        "HPO objective={}; search space rollout={}, gamma_gae presets={}, "
         "checkpoint_intervals={}. If you changed param names vs an existing DB study, "
         "use a new --study-name or storage file.",
+        args.objective,
         len(rollout_labels),
         len(_GAMMA_GAE_PRESETS),
         _CHECKPOINT_INTERVAL_CHOICES,
@@ -168,14 +180,25 @@ def main() -> None:
         assert metrics is not None
         win_townhall_frac = float(metrics["win_townhall_frac"])
         win_frac = float(metrics["win_frac"])
+        mean_ep = float(metrics["mean_episode_reward"])
+        if args.objective == "ep_rew_mean":
+            value = mean_ep
+        elif args.objective == "win_townhall_frac":
+            value = win_townhall_frac
+        else:
+            value = win_frac
         logger.info(
-            "trial {} finished: win_townhall_frac={} win_frac={} outcomes={}",
+            "trial {} finished: objective={} value={} mean_episode_reward={} "
+            "win_townhall_frac={} win_frac={} outcomes={}",
             trial.number,
+            args.objective,
+            value,
+            mean_ep,
             win_townhall_frac,
             win_frac,
             metrics.get("outcome_fractions"),
         )
-        return win_townhall_frac
+        return value
 
     storage = args.storage.strip() or None
     sampler = optuna.samplers.TPESampler(seed=args.seed)
@@ -189,7 +212,7 @@ def main() -> None:
     study.optimize(objective, n_trials=args.n_trials, n_jobs=args.n_jobs, show_progress_bar=True)
 
     best = study.best_trial
-    logger.info("Best trial: {} win_townhall_frac={}", best.number, best.value)
+    logger.info("Best trial: {} {}={}", best.number, args.objective, best.value)
     logger.info("Best params: {}", best.params)
 
 
