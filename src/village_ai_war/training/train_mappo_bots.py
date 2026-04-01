@@ -41,8 +41,9 @@ def run_mappo_bots_training(
 ) -> dict[str, Any] | None:
     """MAPPO (PPO + centralized critic) with a rolling pool of past MAPPO snapshots.
 
-    If ``return_metrics`` is True, returns ``win_frac`` and ``outcome_fractions`` from the
-    episode metrics callback; otherwise returns ``None``.
+    If ``return_metrics`` is True, returns ``win_frac``, ``win_townhall_frac`` (fraction of
+    episodes in the metrics window that are wins via ``townhall_destroyed``), and
+    ``outcome_fractions`` from the episode metrics callback; otherwise returns ``None``.
     """
     flat = _flat_cfg(cfg)
     tcfg = flat["training"]
@@ -100,6 +101,7 @@ def run_mappo_bots_training(
         clip_range=clip_range,
         ent_coef=ent_coef,
         vf_coef=vf_coef,
+        max_grad_norm=float(tcfg.get("max_grad_norm", 0.5)),
         tensorboard_log=tb_log,
         policy_kwargs={
             "map_size": n,
@@ -139,6 +141,7 @@ def run_mappo_bots_training(
         fracs = metrics_cb.outcome_fractions()
         return {
             "win_frac": float(fracs.get("win", 0.0)),
+            "win_townhall_frac": float(metrics_cb.win_townhall_frac()),
             "outcome_fractions": fracs,
         }
     return None

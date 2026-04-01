@@ -15,6 +15,7 @@ training:
   clip_range: 0.2
   ent_coef: 0.01
   vf_coef: 0.5
+  max_grad_norm: 0.5
   critic_hidden_dim: 256
   pool_max_size: 15
   checkpoint_interval: 100000
