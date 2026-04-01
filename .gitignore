@@ -12,3 +12,6 @@ outputs/
 dist/
 build/
 .cursor/
+*.db
+*.log
+*.logs
