@@ -520,6 +520,7 @@ class GameEnv(gym.Env):
         if self.mode == "bot" and learner_bot_actions is not None:
             mode = state.villages[self.team].global_reward_mode
             reward = 0.0
+            n_controlled = 0
             for bid, act in learner_bot_actions.items():
                 bot = next(
                     (b for v in state.villages for b in v.bots if b.bot_id == bid),
@@ -528,6 +529,10 @@ class GameEnv(gym.Env):
                 if bot is not None:
                     bev = self._bot_events_for(bot, merged, int(act), state)
                     reward += float(BotRewardCalculator.compute(bev, bot, mode, self.config))
+                    n_controlled += 1
+            reward = self._finalize_bot_team_reward(
+                reward, n_controlled, merged, state, terminated, truncated
+            )
         elif self.mode == "bot" and learner_bot_action is not None:
             bot = next(
                 (
@@ -542,8 +547,13 @@ class GameEnv(gym.Env):
                 mode = state.villages[self.team].global_reward_mode
                 bev = self._bot_events_for(bot, merged, learner_bot_action, state)
                 reward = float(BotRewardCalculator.compute(bev, bot, mode, self.config))
+                reward = self._finalize_bot_team_reward(
+                    reward, 1, merged, state, terminated, truncated
+                )
             else:
-                reward = 0.0
+                reward = self._finalize_bot_team_reward(
+                    0.0, 0, merged, state, terminated, truncated
+                )
         else:
             reward = float(
                 VillageRewardCalculator.compute(
@@ -766,6 +776,28 @@ class GameEnv(gym.Env):
             return float("inf")
         px, py = pos
         return float(min(abs(px - tx) + abs(py - ty) for tx, ty in targets))
+
+    def _finalize_bot_team_reward(
+        self,
+        per_bot_sum: float,
+        n_controlled: int,
+        merged: Mapping[str, Any],
+        state: GameState,
+        terminated: bool,
+        truncated: bool,
+    ) -> float:
+        """Mean/sum over controlled bots, then team shaping and terminal win/loss."""
+        rcfg = self.config["rewards"]["bot"]
+        agg = str(rcfg.get("reward_aggregate", "mean")).lower()
+        r = per_bot_sum
+        if agg == "mean" and n_controlled > 0:
+            r /= float(n_controlled)
+        vil = state.villages[self.team]
+        r += BotRewardCalculator.team_addon(merged, vil, self.config)
+        r += BotRewardCalculator.terminal_addon(
+            self.config, terminated or truncated, self.team, state.winner
+        )
+        return r
 
     def _bot_events_for(
         self,
